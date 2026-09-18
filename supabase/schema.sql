@@ -528,3 +528,13 @@ grant execute on function crear_pedido_landing(text, text, text, modalidad_pedid
 -- Realtime
 -- ---------------------------------------------------------------------
 alter publication supabase_realtime add table pedidos, pedido_items, cuentas;
+
+-- ---------------------------------------------------------------------
+-- Un comercio tiene exactamente un dueño (docs/SCHEMA.md, sección "Roles")
+-- ---------------------------------------------------------------------
+-- Mismo patrón que `cuenta_abierta_unica` más arriba: índice único parcial,
+-- solo sobre las filas con rol = 'duenio'. No depende de `activo` a
+-- propósito: aunque se desactive al dueño, sigue siendo el titular.
+create unique index miembros_un_duenio_por_comercio
+  on miembros (comercio_id)
+  where rol = 'duenio';

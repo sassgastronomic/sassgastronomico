@@ -3,11 +3,17 @@ import Link from "next/link";
 import type { Database, EstadoComercio, PlanComercio } from "@/types/database";
 import { crearClienteServidor } from "@/lib/supabase/server";
 
+type Duenio = {
+  nombre: string;
+  email: string | null;
+};
+
 type ComercioListado = Pick<
   Database["public"]["Tables"]["comercios"]["Row"],
   "id" | "nombre" | "slug" | "plan" | "estado" | "limite_usuarios" | "creado_en"
 > & {
   miembros_activos: number;
+  duenio: Duenio | null;
 };
 
 type ResultadoComercios =
@@ -44,8 +50,15 @@ const formateadorFecha = new Intl.DateTimeFormat("es-AR", {
 
 /**
  * Trae todos los comercios (la policy `comercios_admin` los deja ver
- * completos solo a `es_admin()`) más la cantidad de miembros activos de
- * cada uno.
+ * completos solo a `es_admin()`) más, de una sola consulta a `miembros`,
+ * la cantidad de miembros activos y los datos del dueño de cada uno.
+ *
+ * Esa consulta a `miembros` embebe el perfil por la FK `perfil_id` (misma
+ * relación declarada en `Relationships` en src/types/database.ts), así que
+ * es una sola ida a la base con un join — nada de una consulta por fila
+ * para el dueño. Los datos de `perfiles` ya son legibles por un admin vía
+ * RLS (`perfiles_propio`: "id = auth.uid() or es_admin()"), no hace falta
+ * la service_role key para esto.
  *
  * Nota: "miembros activos" acá es el conteo simple de `miembros.activo =
  * true`, no `usuarios_ocupados()` (la función SQL que además descuenta los
@@ -71,8 +84,8 @@ async function obtenerComercios(): Promise<ResultadoComercios> {
 
   const { data: miembros, error: errorMiembros } = await supabase
     .from("miembros")
-    .select("comercio_id")
-    .eq("activo", true);
+    .select("comercio_id, rol, activo, perfiles(nombre, email)")
+    .order("creado_en", { ascending: true });
 
   if (errorMiembros) {
     return {
@@ -82,17 +95,38 @@ async function obtenerComercios(): Promise<ResultadoComercios> {
   }
 
   const activosPorComercio = new Map<string, number>();
-  for (const { comercio_id } of miembros) {
-    activosPorComercio.set(
-      comercio_id,
-      (activosPorComercio.get(comercio_id) ?? 0) + 1,
-    );
+  const duenioPorComercio = new Map<string, Duenio>();
+
+  for (const miembro of miembros) {
+    if (miembro.activo) {
+      activosPorComercio.set(
+        miembro.comercio_id,
+        (activosPorComercio.get(miembro.comercio_id) ?? 0) + 1,
+      );
+    }
+
+    // El dueño se identifica por rol, no por estar activo: aunque se lo
+    // desactive, sigue siendo el titular del comercio. Ordenado por
+    // creado_en asc arriba, así que si llegara a haber más de uno (no
+    // debería: ver el índice único al final de supabase/schema.sql) nos
+    // quedamos con el primero.
+    if (
+      miembro.rol === "duenio" &&
+      miembro.perfiles &&
+      !duenioPorComercio.has(miembro.comercio_id)
+    ) {
+      duenioPorComercio.set(miembro.comercio_id, {
+        nombre: miembro.perfiles.nombre,
+        email: miembro.perfiles.email,
+      });
+    }
   }
 
   return {
     comercios: comercios.map((comercio) => ({
       ...comercio,
       miembros_activos: activosPorComercio.get(comercio.id) ?? 0,
+      duenio: duenioPorComercio.get(comercio.id) ?? null,
     })),
     error: null,
   };
@@ -191,6 +225,15 @@ export default async function PaginaAdmin() {
                         <p className="text-xs text-neutral-500">
                           /{comercio.slug}
                         </p>
+                        {comercio.duenio ? (
+                          <p className="text-xs text-neutral-500">
+                            {comercio.duenio.email ?? comercio.duenio.nombre}
+                          </p>
+                        ) : (
+                          <p className="mt-0.5 inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-600/20">
+                            Sin dueño asignado
+                          </p>
+                        )}
                       </Link>
                     </td>
                     <td className="p-0">
