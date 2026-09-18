@@ -13,16 +13,31 @@ const ESTADO_INICIAL: EstadoNuevoComercio = {};
 
 const ESTILO_LABEL = "mb-1 block text-sm font-medium text-neutral-700";
 const ESTILO_INPUT_BASE =
-  "w-full rounded-md border px-3 py-2 text-sm text-neutral-900 outline-none focus:ring-1";
+  "w-full rounded-md border px-3 py-2 text-sm outline-none focus:ring-1";
+const ESTILO_BOTON_LINK =
+  "text-xs font-medium text-neutral-600 underline-offset-2 hover:text-neutral-900 hover:underline focus:underline";
 
-// Nunca mezclar `border-neutral-300` y `border-red-400` en el mismo string:
-// con Tailwind, cuál gana depende del orden en que se generó el CSS, no del
-// orden en el className. Por eso son dos variantes separadas, no un solo
-// string con clases condicionales encima.
+// Nunca mezclar variantes (`border-neutral-300` con `border-red-400`,
+// `text-neutral-900` con `text-neutral-500`, etc.) en el mismo string: con
+// Tailwind, cuál gana depende del orden en que se generó el CSS, no del
+// orden en el className. Por eso cada estado tiene su propio string
+// completo en vez de ir agregando clases condicionales encima.
 function claseInput(conError: boolean): string {
   return conError
-    ? `${ESTILO_INPUT_BASE} border-red-400 focus:border-red-500 focus:ring-red-500`
-    : `${ESTILO_INPUT_BASE} border-neutral-300 focus:border-neutral-900 focus:ring-neutral-900`;
+    ? `${ESTILO_INPUT_BASE} border-red-400 bg-white text-neutral-900 focus:border-red-500 focus:ring-red-500`
+    : `${ESTILO_INPUT_BASE} border-neutral-300 bg-white text-neutral-900 focus:border-neutral-900 focus:ring-neutral-900`;
+}
+
+function claseSlug(conError: boolean, deshabilitado: boolean): string {
+  if (conError) {
+    return `${ESTILO_INPUT_BASE} border-red-400 bg-white text-neutral-900 focus:border-red-500 focus:ring-red-500`;
+  }
+  if (deshabilitado) {
+    // Fondo gris + texto más tenue, pero con contraste suficiente para
+    // seguir siendo legible (no es un placeholder, es el slug real).
+    return `${ESTILO_INPUT_BASE} cursor-not-allowed border-neutral-300 bg-neutral-100 text-neutral-500`;
+  }
+  return `${ESTILO_INPUT_BASE} border-neutral-300 bg-white text-neutral-900 focus:border-neutral-900 focus:ring-neutral-900`;
 }
 
 function generarSlug(nombre: string): string {
@@ -48,7 +63,11 @@ export default function PaginaNuevoComercio() {
   // resto de los casos el propio estado de React ya conserva lo tipeado.
   const [nombre, setNombre] = useState(estado.valores?.nombre ?? "");
   const [slug, setSlug] = useState(estado.valores?.slug ?? "");
-  const [slugTocado, setSlugTocado] = useState(false);
+  // El slug arranca deshabilitado y autogenerado a partir del nombre. Una
+  // vez que el usuario pide editarlo, queda habilitado el resto de la
+  // sesión del formulario (no se vuelve a deshabilitar solo).
+  const [slugHabilitado, setSlugHabilitado] = useState(false);
+  const [autogenerarSlug, setAutogenerarSlug] = useState(true);
   const [plan, setPlan] = useState(estado.valores?.plan ?? "take_away");
   const [limiteUsuarios, setLimiteUsuarios] = useState(
     estado.valores?.limiteUsuarios ?? "10",
@@ -68,11 +87,21 @@ export default function PaginaNuevoComercio() {
   const refDuenioEmail = useRef<HTMLInputElement>(null);
   const refDuenioPassword = useRef<HTMLInputElement>(null);
 
+  // Si el servidor devuelve un error de slug, el campo tiene que quedar
+  // editable para poder corregirlo, así haya estado deshabilitado o no.
+  // Se deriva en el render (no con un setState dentro de un efecto: React
+  // desaconseja eso porque encadena renders de más) — apenas cambia
+  // `estado`, este valor ya sale bien en el mismo render, sin esperar un
+  // ciclo extra.
+  const slugEditable = slugHabilitado || estado.campo === "slug";
+
   // Foco al campo que causó el error. Depende de `estado` completo (no de
   // `estado.campo`) para que también dispare si dos envíos seguidos fallan
-  // por el mismo campo.
+  // por el mismo campo. Para el caso de "slug", `slugEditable` ya deja el
+  // input habilitado en este mismo render, así que el foco entra bien.
   useEffect(() => {
     if (!estado.campo) return;
+
     const refs: Record<
       CampoNuevoComercio,
       React.RefObject<HTMLInputElement | HTMLSelectElement | null>
@@ -88,13 +117,42 @@ export default function PaginaNuevoComercio() {
     refs[estado.campo].current?.focus();
   }, [estado]);
 
+  // Foco al habilitar el slug a mano con el botón "Editar slug" (evento
+  // real de usuario, no efecto reaccionando a un fetch: acá sí corresponde
+  // el setState de abajo, en el handler del click).
+  useEffect(() => {
+    if (slugHabilitado) {
+      refSlug.current?.focus();
+    }
+  }, [slugHabilitado]);
+
   function alCambiarNombre(valor: string) {
     setNombre(valor);
-    // Autogenerar el slug a partir del nombre, salvo que el admin ya lo
-    // haya editado a mano.
-    if (!slugTocado) {
+    // Autogenerar el slug a partir del nombre, salvo que el admin ya haya
+    // pedido editarlo a mano. Esto sigue aplicando aunque el campo esté
+    // deshabilitado: se ve el valor generado actualizarse en vivo.
+    if (autogenerarSlug) {
       setSlug(generarSlug(valor));
     }
+  }
+
+  function alCambiarSlug(valor: string) {
+    // Si llegó acá es porque el campo está editable (deshabilitado no
+    // dispara onChange) — lo dejamos habilitado en firme por si el usuario
+    // llegó a este estado por un error de servidor en vez de por el botón.
+    setSlugHabilitado(true);
+    setAutogenerarSlug(false);
+    setSlug(valor);
+  }
+
+  function habilitarSlug() {
+    setSlugHabilitado(true);
+    setAutogenerarSlug(false);
+  }
+
+  function volverAGenerarSlug() {
+    setAutogenerarSlug(true);
+    setSlug(generarSlug(nombre));
   }
 
   return (
@@ -136,28 +194,53 @@ export default function PaginaNuevoComercio() {
           </div>
 
           <div>
-            <label htmlFor="slug" className={ESTILO_LABEL}>
-              Slug ({`/${slug || "..."}`})
-            </label>
+            <div className="mb-1 flex items-center justify-between">
+              <label
+                htmlFor="slug"
+                className="block text-sm font-medium text-neutral-700"
+              >
+                Slug ({`/${slug || "..."}`})
+              </label>
+              {!slugEditable ? (
+                <button
+                  type="button"
+                  onClick={habilitarSlug}
+                  className={ESTILO_BOTON_LINK}
+                >
+                  Editar slug
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={volverAGenerarSlug}
+                  className={ESTILO_BOTON_LINK}
+                >
+                  Volver a generar
+                </button>
+              )}
+            </div>
+
+            {/* El input visible puede estar disabled, y un input disabled
+                no viaja en el FormData nativo. El valor real siempre se
+                manda por este campo oculto, ligado al mismo estado. */}
+            <input type="hidden" name="slug" value={slug} />
             <input
               ref={refSlug}
               id="slug"
-              name="slug"
               required
               pattern="[a-z0-9-]+"
+              disabled={!slugEditable}
               value={slug}
-              onChange={(evento) => {
-                setSlugTocado(true);
-                setSlug(evento.target.value);
-              }}
-              className={claseInput(estado.campo === "slug")}
+              onChange={(evento) => alCambiarSlug(evento.target.value)}
+              className={claseSlug(estado.campo === "slug", !slugEditable)}
             />
             {estado.campo === "slug" ? (
               <p className="mt-1 text-xs text-red-600">{estado.error}</p>
             ) : (
               <p className="mt-1 text-xs text-neutral-500">
                 Solo minúsculas, números y guiones. Se genera solo a partir
-                del nombre, pero se puede editar.
+                del nombre; “Editar slug” lo desbloquea para corregirlo a
+                mano.
               </p>
             )}
           </div>
