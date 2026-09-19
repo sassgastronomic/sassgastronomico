@@ -1,0 +1,169 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+
+import { validarNombreCategoria } from "@/lib/categorias/validacion";
+import { obtenerContextoComercio } from "@/lib/comercio/contexto";
+import { crearClienteServidor } from "@/lib/supabase/server";
+
+export type CampoEditarCategoria = "nombre" | "sector_id" | "activo";
+
+export type EstadoEditarCategoria = {
+  error?: string;
+  campo?: CampoEditarCategoria;
+  valores?: { nombre: string; sectorId: string; activo: string };
+  // Aviso "¿estás seguro?" (tiene productos activos) que todavía no
+  // bloquea nada — a diferencia de `error`, que sí impide guardar.
+  confirmacion?: string;
+};
+
+/**
+ * Actualiza nombre, sector y activo/inactivo de una categoría. El orden no
+ * se toca acá: se reordena desde el listado con los botones subir/bajar
+ * (ver ../acciones-orden.ts).
+ *
+ * Reglas de negocio (ver docs/SCHEMA.md y la tarea):
+ * - No se borra, se desactiva.
+ * - Si tiene productos activos, se avisa cuántos antes de desactivar (no
+ *   bloquea: se puede confirmar igual). Mismo mecanismo que sectores: un
+ *   segundo botón de submit con `name="confirmar" value="true"`, no un
+ *   input oculto controlado por estado.
+ * - El sector elegido tiene que existir y ser de este comercio, pero no
+ *   hace falta que esté activo: el <select> del form incluye también el
+ *   sector actual de la categoría aunque ya no esté activo, para no
+ *   forzar un cambio de sector solo por editar el nombre.
+ */
+export async function actualizarCategoria(
+  _estadoPrevio: EstadoEditarCategoria,
+  formData: FormData,
+): Promise<EstadoEditarCategoria> {
+  const id = String(formData.get("id") ?? "");
+  const nombre = String(formData.get("nombre") ?? "").trim();
+  const sectorId = String(formData.get("sector_id") ?? "");
+  const activoTexto = String(formData.get("activo") ?? "");
+  const confirmar = formData.get("confirmar") === "true";
+
+  if (!id) {
+    return { error: "Falta la categoría a editar." };
+  }
+
+  const valores = { nombre, sectorId, activo: activoTexto };
+
+  const errorNombre = validarNombreCategoria(nombre);
+  if (errorNombre) return { error: errorNombre, campo: "nombre", valores };
+
+  if (!sectorId) {
+    return { error: "Elegí un sector.", campo: "sector_id", valores };
+  }
+
+  if (activoTexto !== "true" && activoTexto !== "false") {
+    return { error: "Elegí un estado válido.", campo: "activo", valores };
+  }
+
+  const activo = activoTexto === "true";
+
+  // Autorización: solo dueño, sin depender del menú ni de la página.
+  const contexto = await obtenerContextoComercio();
+  if (contexto.tipo !== "activo") {
+    redirect("/app");
+  }
+  if (contexto.rol !== "duenio") {
+    redirect("/app");
+  }
+
+  const supabase = await crearClienteServidor();
+
+  const { data: categoriaActual, error: errorCategoriaActual } = await supabase
+    .from("categorias")
+    .select("id, activo")
+    .eq("id", id)
+    .eq("comercio_id", contexto.comercio.id)
+    .single();
+
+  if (errorCategoriaActual || !categoriaActual) {
+    return { error: "No se encontró la categoría.", valores };
+  }
+
+  // El sector tiene que existir y ser de este comercio (no se exige que
+  // esté activo: ver comentario arriba).
+  const { data: sector, error: errorSector } = await supabase
+    .from("sectores")
+    .select("id")
+    .eq("id", sectorId)
+    .eq("comercio_id", contexto.comercio.id)
+    .maybeSingle();
+
+  if (errorSector) {
+    return { error: "No se pudo validar el sector. Probá de nuevo.", valores };
+  }
+  if (!sector) {
+    return { error: "Elegí un sector válido.", campo: "sector_id", valores };
+  }
+
+  // Nombres duplicados: sin distinguir mayúsculas, en memoria, contra otras
+  // categorías activas (no contra sí misma ni contra inactivas).
+  const { data: existentes, error: errorExistentes } = await supabase
+    .from("categorias")
+    .select("nombre")
+    .eq("comercio_id", contexto.comercio.id)
+    .eq("activo", true)
+    .neq("id", id);
+
+  if (errorExistentes) {
+    return { error: "No se pudo validar el nombre. Probá de nuevo.", valores };
+  }
+
+  const yaExiste = existentes.some(
+    (categoria) =>
+      categoria.nombre.trim().toLowerCase() === nombre.toLowerCase(),
+  );
+  if (yaExiste) {
+    return {
+      error: "Ya hay una categoría activa con ese nombre.",
+      campo: "nombre",
+      valores,
+    };
+  }
+
+  const seDesactiva = categoriaActual.activo && !activo;
+
+  if (seDesactiva && !confirmar) {
+    const { data: productos, error: errorProductos } = await supabase
+      .from("productos")
+      .select("id")
+      .eq("categoria_id", id)
+      .eq("comercio_id", contexto.comercio.id)
+      .eq("activo", true);
+
+    if (errorProductos) {
+      return { error: "No se pudo validar. Probá de nuevo.", campo: "activo", valores };
+    }
+
+    const cantidad = productos.length;
+    if (cantidad > 0) {
+      const plural = cantidad === 1 ? "" : "s";
+      return {
+        valores,
+        confirmacion:
+          `Esta categoría tiene ${cantidad} producto${plural} activo${plural}. ` +
+          `Van a dejar de mostrarse en la carta hasta que la reactives. ` +
+          `¿Desactivar igual?`,
+      };
+    }
+  }
+
+  // RLS: `categorias_duenio` exige `tiene_rol(comercio_id, '{duenio}')`.
+  const { error: errorActualizar } = await supabase
+    .from("categorias")
+    .update({ nombre, sector_id: sectorId, activo })
+    .eq("id", id)
+    .eq("comercio_id", contexto.comercio.id);
+
+  if (errorActualizar) {
+    return { error: "No se pudo guardar la categoría. Probá de nuevo.", valores };
+  }
+
+  revalidatePath("/app/carta/categorias");
+  redirect("/app/carta/categorias");
+}

@@ -1,41 +1,32 @@
-import { redirect } from "next/navigation";
+import { obtenerContextoComercio } from "@/lib/comercio/contexto";
+import type { PlanComercio } from "@/types/database";
 
-import { cerrarSesion } from "@/lib/auth/actions";
-import { crearClienteServidor } from "@/lib/supabase/server";
+const ETIQUETA_PLAN: Record<PlanComercio, string> = {
+  take_away: "Take away",
+  salon: "Salón",
+  completo: "Completo",
+};
 
-/**
- * App del comercio (dueño, mostrador, mozo, cocina, barra). `proxy.ts` ya
- * redirige a /login a quien no tenga sesión (chequeo optimista); acá se
- * repite el chequeo cerca de los datos, como recomienda la guía de
- * autenticación de Next.js.
- */
 export default async function PaginaApp() {
-  const supabase = await crearClienteServidor();
+  const contexto = await obtenerContextoComercio();
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/login");
+  // El layout (src/app/app/layout.tsx) ya filtra sin_membresia/suspendido
+  // antes de que se llegue a renderizar esta página. Este chequeo es solo
+  // para angostar el tipo de `contexto` acá.
+  if (contexto.tipo !== "activo") {
+    return null;
   }
 
+  const { comercio, usuario } = contexto;
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-neutral-50 px-4">
-      <div className="w-full max-w-sm rounded-xl border border-neutral-200 bg-white p-8 text-center shadow-sm">
-        <h1 className="mb-2 text-xl font-semibold text-neutral-900">
-          App del comercio
-        </h1>
-        <p className="mb-6 text-sm text-neutral-500">{user.email}</p>
-        <form action={cerrarSesion}>
-          <button
-            type="submit"
-            className="w-full rounded-md bg-neutral-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-neutral-700"
-          >
-            Cerrar sesión
-          </button>
-        </form>
-      </div>
-    </main>
+    <div className="space-y-1">
+      <h1 className="text-xl font-semibold text-neutral-900">
+        Hola, {usuario.nombre || usuario.email}
+      </h1>
+      <p className="text-sm text-neutral-500">
+        {comercio.nombre} · Plan {ETIQUETA_PLAN[comercio.plan]}
+      </p>
+    </div>
   );
 }

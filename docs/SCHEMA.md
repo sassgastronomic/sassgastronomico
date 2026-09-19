@@ -50,12 +50,13 @@ App web multi-comercio (SaaS) para bares, restós y take away. Organiza pedidos 
 | `duenio` | Todo en su comercio: carta, mesas, usuarios, pedidos |
 | `mostrador` | Confirma/rechaza pedidos de la landing, edita y cancela pedidos, entrega take away |
 | `mozo` | Abre/cierra mesas, carga rondas, escanea QR, marca ítems entregados |
-| `cocina` | Ve su pantalla y cambia estados de sus ítems |
-| `barra` | Igual que cocina, para el sector barra |
+| `sector` | Ve la pantalla y cambia el estado de los ítems de los sectores que tiene asignados |
 
 - Los **admins** (`perfiles.es_admin`) son del equipo del producto, no de un comercio. Ven y gestionan todo desde el panel de administrador.
 - Los admins crean el comercio y el usuario dueño. El dueño crea a su personal.
-- Se permite compartir una cuenta entre dispositivos (ej. una cuenta "cocina" en 2 tablets). Los mozos conviene que tengan cuenta propia para saber quién atendió cada mesa. No hay control de sesiones simultáneas.
+- Se permite compartir una cuenta entre dispositivos (ej. una cuenta de cocina en 2 tablets). Los mozos conviene que tengan cuenta propia para saber quién atendió cada mesa. No hay control de sesiones simultáneas.
+- Un rol `sector` no ve todos los sectores por defecto: cada miembro se vincula a los sectores concretos que le tocan (`miembro_sectores`), así que "Juan cocina, María atiende la barra" son dos miembros con rol `sector` cada uno con su propia asignación. El dueño sí ve todos los sectores activos del comercio, sin necesidad de asignación explícita.
+- `cocina` y `barra` existían como roles separados y quedaron obsoletos (reemplazados por `sector` + `miembro_sectores`, ver "Tablas"); el enum los conserva por limitación de Postgres pero no se usan más.
 
 ## Diagrama
 
@@ -64,6 +65,8 @@ erDiagram
   perfiles ||--o{ miembros : "trabaja en"
   comercios ||--o{ miembros : tiene
   comercios ||--o{ sectores : tiene
+  miembros ||--o{ miembro_sectores : "ve (rol sector)"
+  sectores ||--o{ miembro_sectores : "visto por"
   comercios ||--o{ categorias : tiene
   comercios ||--o{ productos : tiene
   comercios ||--o{ adicionales : tiene
@@ -93,14 +96,17 @@ erDiagram
 
 ### Carta (sprint 2)
 
-**`sectores`**: `id`, `comercio_id`, `nombre` (Cocina, Barra), `orden`, `activo`. Todo comercio nace con "Cocina".
+**`sectores`**: `id`, `comercio_id`, `nombre` (libre: "Cocina", "Barra", "Parrilla", lo que haga falta), `orden`, `activo`. Todo comercio nace con "Cocina".
+
+**`miembro_sectores`**: (`comercio_id`, `miembro_id`, `sector_id`), PK compuesta por `miembro_id` + `sector_id`. Qué sectores puede ver un miembro con rol `sector`. El dueño no necesita filas acá: ve todos los sectores activos igual.
 
 **`categorias`**: `id`, `comercio_id`, `nombre`, `sector_id` (destino por defecto de sus productos), `orden`, `activo`.
 
-**`productos`**: `id`, `comercio_id`, `categoria_id`, `nombre`, `descripcion`, `precio`, `imagen_url`, `sector_id` (opcional, pisa el de la categoría), `sin_stock`, `activo`, `orden`.
+**`productos`**: `id`, `comercio_id`, `categoria_id`, `nombre`, `descripcion`, `precio`, `imagen_url`, `sector_id`, `sin_stock`, `activo`, `orden`.
 
 - `sin_stock = true` → se muestra en gris con "Sin stock" y no se puede pedir.
 - `activo = false` → no se muestra.
+- `sector_id`: la columna existe y la siguen usando las copias en `pedido_items` (a qué pantalla va cada ítem) y `crear_pedido_landing`, pero **la interfaz de administración del comercio siempre la deja en `null`** al crear o editar un producto. Decisión de negocio: un producto se prepara siempre en el sector de su categoría; si un local necesita que algo salga de otro sector, crea una categoría aparte para eso en vez de pisarle el sector a un producto puntual. Si en algún momento se necesita volver a permitir un sector propio por producto, la columna ya está lista.
 
 **`adicionales`**: `id`, `comercio_id`, `nombre` ("Extra cheddar", "Sin cebolla"), `precio_extra` (0 si es gratis), `activo`. Se crean una vez y se reutilizan.
 

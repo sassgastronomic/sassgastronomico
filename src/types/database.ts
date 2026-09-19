@@ -3,12 +3,14 @@
  * Ver docs/SCHEMA.md para el detalle de cada tabla y las reglas de negocio.
  *
  * La forma de cada tabla (`Row` / `Insert` / `Update` / `Relationships`) y
- * las claves `Views` / `Functions` (vacías: no se usan todavía) siguen la
- * convención de `supabase gen types typescript`, que es lo que espera el
- * genérico `Database` de `@supabase/supabase-js`.
+ * la clave `Views` (vacía: no se usan todavía) siguen la convención de
+ * `supabase gen types typescript`, que es lo que espera el genérico
+ * `Database` de `@supabase/supabase-js`. `Functions` solo tiene tipada
+ * `carta_publica`, la única que se llama desde la app por ahora — agregar
+ * las demás (`crear_pedido_landing`) cuando haga falta usarlas.
  *
- * Mantener este archivo a mano con el esquema: si se agrega una tabla o
- * columna en `supabase/schema.sql`, reflejarla acá.
+ * Mantener este archivo a mano con el esquema: si se agrega una tabla,
+ * columna o función en `supabase/schema.sql`, reflejarla acá.
  */
 
 // ---------------------------------------------------------------------
@@ -17,7 +19,12 @@
 
 export type PlanComercio = "take_away" | "salon" | "completo";
 export type EstadoComercio = "activo" | "suspendido";
-export type RolMiembro = "duenio" | "mostrador" | "mozo" | "cocina" | "barra";
+// El enum `rol_miembro` en Postgres todavía tiene 'cocina' y 'barra' (no se
+// pueden sacar valores de un enum sin recrear el tipo), pero ya no se usan:
+// los reemplazó 'sector' + la tabla `miembro_sectores` (qué sector concreto
+// ve cada miembro). Se excluyen acá a propósito para no tener que sostener
+// ramas muertas en cada `Record<RolMiembro, _>` de la app.
+export type RolMiembro = "duenio" | "mostrador" | "mozo" | "sector";
 export type EstadoCuenta = "abierta" | "cerrada";
 export type OrigenPedido = "landing" | "mozo" | "qr_mesa" | "mostrador";
 export type EstadoPedido =
@@ -27,6 +34,38 @@ export type EstadoPedido =
   | "cancelado";
 export type ModalidadPedido = "retiro" | "envio";
 export type EstadoItem = "pendiente" | "en_preparacion" | "listo" | "entregado";
+
+// ---------------------------------------------------------------------
+// Funciones (RPC)
+// ---------------------------------------------------------------------
+
+/**
+ * Lo que devuelve `carta_publica(p_slug)`: la carta activa de un comercio,
+ * lista para mostrarle al cliente (landing, QR de mesa) o para armar una
+ * vista previa fiel en el panel. `null` si el slug no existe o el
+ * comercio está suspendido (la función solo mira `estado = 'activo'`).
+ *
+ * Ojo: esta función deja afuera las categorías y productos inactivos (su
+ * SQL los filtra) y no incluye el sector de cada categoría — para una
+ * vista que necesite mostrar también eso, hace falta completarla con
+ * consultas propias (ver src/app/app/carta/page.tsx).
+ */
+export type CartaPublicaResultado = {
+  comercio: { id: string; nombre: string; plan: PlanComercio };
+  categorias: {
+    id: string;
+    nombre: string;
+    productos: {
+      id: string;
+      nombre: string;
+      descripcion: string | null;
+      precio: number;
+      imagen_url: string | null;
+      sin_stock: boolean;
+      adicionales: { id: string; nombre: string; precio_extra: number }[];
+    }[];
+  }[];
+};
 
 // ---------------------------------------------------------------------
 // Tablas
@@ -138,6 +177,43 @@ export interface Database {
             foreignKeyName: "sectores_comercio_id_fkey";
             columns: ["comercio_id"];
             referencedRelation: "comercios";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+
+      // Qué sectores concretos ve cada miembro con rol 'sector'.
+      miembro_sectores: {
+        Row: {
+          comercio_id: string;
+          miembro_id: string;
+          sector_id: string;
+        };
+        Insert: {
+          comercio_id: string;
+          miembro_id: string;
+          sector_id: string;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["miembro_sectores"]["Insert"]
+        >;
+        Relationships: [
+          {
+            foreignKeyName: "miembro_sectores_comercio_id_fkey";
+            columns: ["comercio_id"];
+            referencedRelation: "comercios";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "miembro_sectores_miembro_id_fkey";
+            columns: ["miembro_id"];
+            referencedRelation: "miembros";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "miembro_sectores_sector_id_fkey";
+            columns: ["sector_id"];
+            referencedRelation: "sectores";
             referencedColumns: ["id"];
           },
         ];
@@ -527,6 +603,11 @@ export interface Database {
       };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      carta_publica: {
+        Args: { p_slug: string };
+        Returns: CartaPublicaResultado | null;
+      };
+    };
   };
 }

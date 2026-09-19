@@ -9,7 +9,11 @@
 -- ---------------------------------------------------------------------
 create type plan_comercio   as enum ('take_away', 'salon', 'completo');
 create type estado_comercio as enum ('activo', 'suspendido');
-create type rol_miembro     as enum ('duenio', 'mostrador', 'mozo', 'cocina', 'barra');
+-- 'cocina' y 'barra' quedan en el enum por limitación de Postgres (no se
+-- pueden sacar valores de un enum sin recrear el tipo), pero ya no se usan:
+-- los reemplazó 'sector' + la tabla miembro_sectores (qué sector concreto
+-- ve cada miembro), ver docs/SCHEMA.md.
+create type rol_miembro     as enum ('duenio', 'mostrador', 'mozo', 'cocina', 'barra', 'sector');
 create type estado_cuenta   as enum ('abierta', 'cerrada');
 create type origen_pedido   as enum ('landing', 'mozo', 'qr_mesa', 'mostrador');
 create type estado_pedido   as enum ('pendiente_confirmar', 'confirmado', 'entregado', 'cancelado');
@@ -74,6 +78,17 @@ create table sectores (
   activo       boolean not null default true
 );
 create index on sectores (comercio_id);
+
+-- Qué sector concreto ve cada miembro con rol 'sector' (reemplaza el viejo
+-- matcheo por nombre de sector, ver docs/SCHEMA.md).
+create table miembro_sectores (
+  comercio_id  uuid not null references comercios(id) on delete cascade,
+  miembro_id   uuid not null references miembros(id)  on delete cascade,
+  sector_id    uuid not null references sectores(id)  on delete cascade,
+  primary key (miembro_id, sector_id)
+);
+create index on miembro_sectores (comercio_id);
+create index on miembro_sectores (sector_id);
 
 create table categorias (
   id           uuid primary key default gen_random_uuid(),
@@ -350,6 +365,7 @@ alter table comercios               enable row level security;
 alter table perfiles                enable row level security;
 alter table miembros                enable row level security;
 alter table sectores                enable row level security;
+alter table miembro_sectores        enable row level security;
 alter table categorias              enable row level security;
 alter table productos               enable row level security;
 alter table adicionales             enable row level security;
@@ -389,7 +405,7 @@ create policy miembros_propio on miembros for select using (perfil_id = auth.uid
 do $$
 declare t text;
 begin
-  foreach t in array array['sectores','categorias','productos','adicionales','producto_adicionales','mesas']
+  foreach t in array array['sectores','miembro_sectores','categorias','productos','adicionales','producto_adicionales','mesas']
   loop
     execute format('create policy %1$s_admin on %1$s for all using (es_admin()) with check (es_admin())', t);
     execute format('create policy %1$s_leer on %1$s for select using (es_miembro(comercio_id))', t);
@@ -421,14 +437,22 @@ begin
   end loop;
 end $$;
 
--- Cocina y barra solo actualizan ítems de su sector
--- (la app solo cambia estado / listo_en; afinar con una función RPC si hace falta)
+-- Rol 'sector' solo actualiza ítems de los sectores que tiene asignados en
+-- miembro_sectores (la app solo cambia estado / listo_en; afinar con una
+-- función RPC si hace falta)
 create policy items_sector on pedido_items for update
   using (
-    (tiene_rol(comercio_id, '{cocina}') and exists (select 1 from sectores s where s.id = sector_id and s.nombre ilike 'cocina'))
-    or (tiene_rol(comercio_id, '{barra}') and exists (select 1 from sectores s where s.id = sector_id and s.nombre ilike 'barra'))
+    tiene_rol(comercio_id, '{sector}')
+    and exists (
+      select 1
+      from miembro_sectores ms
+      join miembros m on m.id = ms.miembro_id
+      where ms.sector_id = pedido_items.sector_id
+        and m.perfil_id = auth.uid()
+        and m.comercio_id = pedido_items.comercio_id
+    )
   )
-  with check (tiene_rol(comercio_id, '{cocina,barra}'));
+  with check (tiene_rol(comercio_id, '{sector}'));
 
 -- ---------------------------------------------------------------------
 -- Lectura pública de la carta (landing y QR de mesa)
