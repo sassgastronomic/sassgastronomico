@@ -10,7 +10,7 @@ import type { EstadoComercio, PlanComercio } from "@/types/database";
 const PLANES_VALIDOS: readonly PlanComercio[] = ["take_away", "salon", "completo"];
 const ESTADOS_VALIDOS: readonly EstadoComercio[] = ["activo", "suspendido"];
 
-// Mismo patrón que el check de `comercios.slug` en supabase/schema.sql.
+// Mismo patrón que el check de `comercios.slug` en supabase/migrations/.
 const REGEX_SLUG = /^[a-z0-9-]+$/;
 const REGEX_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 

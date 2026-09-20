@@ -7,7 +7,7 @@ import type { Database } from "@/types/database";
  * Cliente de Supabase para Server Components, Server Actions y Route Handlers.
  *
  * Usa la clave anónima (nunca la `service_role`) y delega los permisos a las
- * políticas RLS de `supabase/schema.sql`. Lee y escribe las cookies de sesión
+ * políticas RLS de `supabase/migrations/`. Lee y escribe las cookies de sesión
  * con la API asíncrona `cookies()` de Next.js 15+.
  *
  * Hay que crear un cliente nuevo en cada request (no compartir uno global).

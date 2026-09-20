@@ -158,7 +158,7 @@ export async function crearComercio(
       email: duenioEmail,
       password: duenioPassword,
       email_confirm: true,
-      // El trigger `crear_perfil_nuevo_usuario` (supabase/schema.sql) toma
+      // El trigger `crear_perfil_nuevo_usuario` (supabase/migrations/) toma
       // `nombre` de `raw_user_meta_data`, que es donde termina `user_metadata`.
       user_metadata: { nombre: duenioNombre },
     });
@@ -202,7 +202,7 @@ export async function crearComercio(
 
   if (errorMiembro) {
     // Revertir todo. Borrar el usuario de Auth también borra su fila de
-    // `perfiles` (FK `on delete cascade` en supabase/schema.sql). Si
+    // `perfiles` (FK `on delete cascade` en supabase/migrations/). Si
     // cualquiera de las dos reversiones falla, no hay reintento posible
     // dentro de este request: quedaría un usuario de Auth sin comercio y/o
     // un comercio sin dueño, y el log es la única forma de enterarse (el

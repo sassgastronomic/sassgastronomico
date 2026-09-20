@@ -1,5 +1,5 @@
 /**
- * Tipos TypeScript derivados de `supabase/schema.sql`.
+ * Tipos TypeScript derivados de `supabase/migrations/`.
  * Ver docs/SCHEMA.md para el detalle de cada tabla y las reglas de negocio.
  *
  * La forma de cada tabla (`Row` / `Insert` / `Update` / `Relationships`) y
@@ -10,7 +10,7 @@
  * las demás (`crear_pedido_landing`) cuando haga falta usarlas.
  *
  * Mantener este archivo a mano con el esquema: si se agrega una tabla,
- * columna o función en `supabase/schema.sql`, reflejarla acá.
+ * columna o función en `supabase/migrations/`, reflejarla acá.
  */
 
 // ---------------------------------------------------------------------
@@ -622,14 +622,14 @@ export interface Database {
         Returns: number;
       };
       // Actualiza `perfiles.nombre` de un miembro del propio comercio,
-      // validando `tiene_rol` adentro (ver supabase/schema.sql: `perfiles`
+      // validando `tiene_rol` adentro (ver supabase/migrations/ — `perfiles`
       // no tiene policy de UPDATE para esto a propósito).
       actualizar_nombre_miembro: {
         Args: { p_miembro_id: string; p_nombre: string };
         Returns: void;
       };
       // ¿Está libre este nombre de usuario? Único en todo el sistema, no
-      // por comercio — ver supabase/schema.sql para por qué hace falta
+      // por comercio — ver supabase/migrations/ para por qué hace falta
       // security definer acá.
       usuario_disponible: {
         Args: { p_usuario: string };

@@ -41,7 +41,7 @@ export default async function PaginaEditarUsuario({
 
   // El dueño no se edita desde acá (ni a sí mismo ni, por construcción, a
   // otro dueño: solo hay uno por comercio, ver el índice único al final de
-  // supabase/schema.sql). Se trata como si no existiera esta pantalla.
+  // supabase/migrations/). Se trata como si no existiera esta pantalla.
   if (miembro.rol === "duenio" || miembro.perfil_id === contexto.usuario.id) {
     redirect("/app/usuarios");
   }

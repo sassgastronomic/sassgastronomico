@@ -1,7 +1,7 @@
 import type { PlanComercio, RolMiembro } from "@/types/database";
 
 /**
- * Espejo en TypeScript de `plan_permite_rol` (supabase/schema.sql): hoy el
+ * Espejo en TypeScript de `plan_permite_rol` (supabase/migrations/): hoy el
  * único rol que un plan puede bloquear es `mozo` (necesita salón o
  * completo). Se usa al crear/editar personal y para calcular cuántos
  * usuarios ocupan el límite — tiene que coincidir exactamente con la
@@ -15,7 +15,7 @@ export function planPermiteRol(plan: PlanComercio, rol: RolMiembro): boolean {
 }
 
 /**
- * Espejo de `usuarios_ocupados` (supabase/schema.sql): miembros activos con
+ * Espejo de `usuarios_ocupados` (supabase/migrations/): miembros activos con
  * un rol que el plan actual permite.
  *
  * Para un solo comercio conviene llamar a esa función por RPC (fuente de

@@ -7,7 +7,7 @@ import type { Database } from "@/types/database";
  *
  * Usa siempre la clave anónima (`NEXT_PUBLIC_SUPABASE_ANON_KEY`): nunca la
  * `service_role`. Los permisos reales los define Postgres vía RLS
- * (ver `supabase/schema.sql`), no este cliente.
+ * (ver `supabase/migrations/`), no este cliente.
  */
 export function crearClienteNavegador() {
   return createBrowserClient<Database>(

@@ -106,7 +106,7 @@ export async function actualizarComercio(
     .eq("id", id);
 
   if (error) {
-    // El trigger `validar_cambio_plan` (supabase/schema.sql) corre "before
+    // El trigger `validar_cambio_plan` (supabase/migrations/) corre "before
     // update of plan" y es el único que puede rechazar este update (mesas
     // abiertas o pedidos por confirmar); por eso el error siempre es del
     // campo `plan`. Se muestra el mensaje del error tal como llega, no uno

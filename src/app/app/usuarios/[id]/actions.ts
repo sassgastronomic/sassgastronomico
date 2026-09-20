@@ -66,7 +66,7 @@ async function obtenerMiembroEditable(
  * Actualiza rol, sectores asignados, estado y nombre de un miembro del
  * personal. El nombre vive en `perfiles` (compartido entre comercios si la
  * persona está en más de uno), así que se actualiza con la función
- * `actualizar_nombre_miembro` (supabase/schema.sql) en vez de un `.update()`
+ * `actualizar_nombre_miembro` (supabase/migrations/) en vez de un `.update()`
  * directo: `perfiles` no tiene policy de UPDATE para "soy dueño de esta
  * persona en algún comercio" a propósito, es una tabla sensible.
  */

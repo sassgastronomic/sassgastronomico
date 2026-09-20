@@ -12,7 +12,7 @@ import { crearClienteServidor } from "@/lib/supabase/server";
  * Ojo: Next.js advierte que un layout no se vuelve a ejecutar en cada
  * navegación del lado del cliente (Partial Rendering), así que este chequeo
  * cubre cada carga de página pero no es la única barrera. La autorización
- * real queda en la policy `comercios_admin` de supabase/schema.sql, que
+ * real queda en la policy `comercios_admin` de supabase/migrations/, que
  * exige `es_admin()` en la base: aunque este guard tuviera un bug, RLS no
  * deja pasar datos de comercios a quien no sea admin.
  */

@@ -1,4 +1,20 @@
 -- =====================================================================
+-- REFERENCIA HISTÓRICA — este archivo YA NO es la fuente de verdad del
+-- esquema.
+--
+-- Hasta el sprint 3 el esquema se aplicaba corriendo este archivo (o
+-- fragmentos sueltos de él) a mano en el SQL editor de Supabase. De acá en
+-- adelante el proyecto usa migraciones de Supabase CLI
+-- (`supabase/migrations/`), que es la fuente de verdad real — ver "Cómo
+-- cambiar el esquema" en docs/SCHEMA.md.
+--
+-- Este archivo queda congelado tal como estaba al momento de migrar, como
+-- foto del esquema en ese punto. No se vuelve a tocar ni a mantener al día:
+-- para ver el estado actual, mirar las migraciones (o el proyecto de
+-- Supabase directamente).
+-- =====================================================================
+
+-- =====================================================================
 -- SaaS gastronómico — Esquema Plan 1 (Supabase / Postgres)
 -- Ver docs/SCHEMA.md para las decisiones de diseño.
 -- Punto de partida: revisar y ajustar antes de producción.

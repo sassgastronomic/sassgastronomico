@@ -48,7 +48,7 @@ export type EstadoNuevoUsuario = {
  * sufijo numérico (juan.bardemo -> juan.bardemo2 -> ...). `base` ya pasó
  * `validarUsuario`, así que cualquier sufijo que se le agregue sigue
  * cumpliendo el formato. `usuario_disponible` es security definer porque
- * `perfiles` acota lecturas por comercio (ver supabase/schema.sql): sin
+ * `perfiles` acota lecturas por comercio (ver supabase/migrations/): sin
  * eso, esta consulta podría dar "libre" algo que ya usa otro comercio.
  */
 async function sugerirUsuarioAlternativo(
@@ -90,7 +90,7 @@ async function sugerirUsuarioAlternativo(
  * sistemas (Postgres + GoTrue) sin una transacción real que las cubra a
  * todas. Acá el único paso "externo" es crear el usuario en Auth, y todo lo
  * demás en Postgres cuelga de ese usuario por FK con `on delete cascade`
- * (perfiles -> miembros -> miembro_sectores, ver supabase/schema.sql), así
+ * (perfiles -> miembros -> miembro_sectores, ver supabase/migrations/), así
  * que revertir siempre es lo mismo: borrar el usuario de Auth deshace todo
  * lo que ya se había insertado.
  */
@@ -155,7 +155,7 @@ export async function crearUsuario(
   }
 
   // 3. El plan decide si `mozo` es un rol válido hoy (política
-  // `plan_permite_rol` en supabase/schema.sql; espejo en
+  // `plan_permite_rol` en supabase/migrations/; espejo en
   // src/lib/miembros/plan.ts).
   if (!planPermiteRol(contexto.comercio.plan, rol)) {
     return {
@@ -218,7 +218,7 @@ export async function crearUsuario(
   }
 
   // 6. Nombre de usuario libre. Único en todo el sistema, no por comercio
-  // (ver supabase/schema.sql): `usuario_disponible` es security definer
+  // (ver supabase/migrations/): `usuario_disponible` es security definer
   // justamente porque una consulta común, acotada por RLS al propio
   // comercio, no vería un choque con el personal de otro.
   const { data: usuarioLibre, error: errorUsuarioLibre } = await supabase.rpc(
@@ -257,7 +257,7 @@ export async function crearUsuario(
       email: construirEmailInterno(usuario),
       password: passwordFinal,
       email_confirm: true,
-      // El trigger `crear_perfil_nuevo_usuario` (supabase/schema.sql) toma
+      // El trigger `crear_perfil_nuevo_usuario` (supabase/migrations/) toma
       // `nombre` y `usuario` de `raw_user_meta_data`, que es donde termina
       // `user_metadata`.
       user_metadata: { nombre, usuario },

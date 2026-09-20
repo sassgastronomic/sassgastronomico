@@ -20,6 +20,22 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Base de datos (Supabase)
+
+El esquema vive en migraciones de Supabase CLI, en `supabase/migrations/` — es la fuente de verdad. `docs/schema-inicial.sql` es una foto histórica de antes de este flujo (hasta el sprint 3, cuando el SQL se corría a mano en el editor de Supabase); queda solo de referencia, no se mantiene al día.
+
+Para cambiar el esquema:
+
+```bash
+npx supabase migration new <nombre-descriptivo>   # crea el archivo vacío
+# escribir el SQL del cambio ahí adentro
+npx supabase db push                              # lo aplica contra Supabase
+```
+
+Nunca se corre SQL suelto a mano en el editor de Supabase: todo cambio pasa por una migración, así el repo y la base no se desincronizan.
+
+Ver [`docs/SCHEMA.md`](docs/SCHEMA.md) para las decisiones de diseño del esquema (tablas, roles, RLS) y la convención de permisos de las funciones (`revoke`/`grant`).
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

@@ -5,7 +5,7 @@
  * `<form>` son solo para feedback inmediato, no reemplazan esto.
  */
 
-// Mismo patrón que el check de `perfiles.usuario` en supabase/schema.sql:
+// Mismo patrón que el check de `perfiles.usuario` en supabase/migrations/:
 // tiene que coincidir exactamente, es la fuente de verdad real.
 const REGEX_USUARIO = /^[a-z0-9._]{3,30}$/;
 

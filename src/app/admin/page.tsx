@@ -115,8 +115,8 @@ async function obtenerComercios(): Promise<ResultadoComercios> {
     // El dueño se identifica por rol, no por estar activo: aunque se lo
     // desactive, sigue siendo el titular del comercio. Ordenado por
     // creado_en asc arriba, así que si llegara a haber más de uno (no
-    // debería: ver el índice único al final de supabase/schema.sql) nos
-    // quedamos con el primero.
+    // debería: hay un índice único parcial sobre miembros(comercio_id)
+    // where rol = 'duenio') nos quedamos con el primero.
     if (
       miembro.rol === "duenio" &&
       miembro.perfiles &&
