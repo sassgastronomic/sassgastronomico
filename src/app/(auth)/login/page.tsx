@@ -25,16 +25,16 @@ export default function PaginaLogin() {
         <form action={accion} className="space-y-4">
           <div>
             <label
-              htmlFor="email"
+              htmlFor="identificador"
               className="mb-1 block text-sm font-medium text-neutral-700"
             >
-              Email
+              Email o usuario
             </label>
             <input
-              id="email"
-              name="email"
-              type="email"
-              autoComplete="email"
+              id="identificador"
+              name="identificador"
+              type="text"
+              autoComplete="username"
               required
               className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm text-neutral-900 outline-none focus:border-neutral-900 focus:ring-1 focus:ring-neutral-900"
             />

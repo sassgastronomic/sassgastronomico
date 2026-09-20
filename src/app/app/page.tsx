@@ -22,7 +22,7 @@ export default async function PaginaApp() {
   return (
     <div className="space-y-1">
       <h1 className="text-xl font-semibold text-neutral-900">
-        Hola, {usuario.nombre || usuario.email}
+        Hola, {usuario.nombre}
       </h1>
       <p className="text-sm text-neutral-500">
         {comercio.nombre} · Plan {ETIQUETA_PLAN[comercio.plan]}

@@ -1,7 +1,13 @@
 import Link from "next/link";
 
-import type { Database, EstadoComercio, PlanComercio } from "@/types/database";
+import { contarUsuariosOcupados } from "@/lib/miembros/plan";
 import { crearClienteServidor } from "@/lib/supabase/server";
+import type {
+  Database,
+  EstadoComercio,
+  PlanComercio,
+  RolMiembro,
+} from "@/types/database";
 
 type Duenio = {
   nombre: string;
@@ -12,7 +18,7 @@ type ComercioListado = Pick<
   Database["public"]["Tables"]["comercios"]["Row"],
   "id" | "nombre" | "slug" | "plan" | "estado" | "limite_usuarios" | "creado_en"
 > & {
-  miembros_activos: number;
+  usuariosOcupados: number;
   duenio: Duenio | null;
 };
 
@@ -51,7 +57,7 @@ const formateadorFecha = new Intl.DateTimeFormat("es-AR", {
 /**
  * Trae todos los comercios (la policy `comercios_admin` los deja ver
  * completos solo a `es_admin()`) más, de una sola consulta a `miembros`,
- * la cantidad de miembros activos y los datos del dueño de cada uno.
+ * cuántos ocupan el límite de usuarios de cada uno y los datos del dueño.
  *
  * Esa consulta a `miembros` embebe el perfil por la FK `perfil_id` (misma
  * relación declarada en `Relationships` en src/types/database.ts), así que
@@ -60,12 +66,13 @@ const formateadorFecha = new Intl.DateTimeFormat("es-AR", {
  * RLS (`perfiles_propio`: "id = auth.uid() or es_admin()"), no hace falta
  * la service_role key para esto.
  *
- * Nota: "miembros activos" acá es el conteo simple de `miembros.activo =
- * true`, no `usuarios_ocupados()` (la función SQL que además descuenta los
- * roles que el plan actual no permite, como `mozo` en plan `take_away`, ver
- * docs/SCHEMA.md). Para este listado alcanza con el conteo simple; si más
- * adelante hace falta el número exacto que usa el trigger de límite,
- * conviene llamar a esa función por RPC en vez de reimplementar la regla acá.
+ * El conteo usa `contarUsuariosOcupados` (src/lib/miembros/plan.ts), el
+ * mismo criterio que la función SQL `usuarios_ocupados` y que el trigger
+ * `validar_limite_usuarios`: activos y con un rol que el plan actual
+ * permite (ej. `mozo` no cuenta en plan `take_away`). Se replica acá en vez
+ * de llamar a la función por RPC una vez por comercio para no convertir
+ * este listado en una consulta N+1 — ya se tiene todo lo necesario (rol,
+ * activo, plan) en las dos consultas de arriba.
  */
 async function obtenerComercios(): Promise<ResultadoComercios> {
   const supabase = await crearClienteServidor();
@@ -94,16 +101,16 @@ async function obtenerComercios(): Promise<ResultadoComercios> {
     };
   }
 
-  const activosPorComercio = new Map<string, number>();
+  const miembrosPorComercio = new Map<
+    string,
+    { activo: boolean; rol: RolMiembro }[]
+  >();
   const duenioPorComercio = new Map<string, Duenio>();
 
   for (const miembro of miembros) {
-    if (miembro.activo) {
-      activosPorComercio.set(
-        miembro.comercio_id,
-        (activosPorComercio.get(miembro.comercio_id) ?? 0) + 1,
-      );
-    }
+    const lista = miembrosPorComercio.get(miembro.comercio_id) ?? [];
+    lista.push({ activo: miembro.activo, rol: miembro.rol });
+    miembrosPorComercio.set(miembro.comercio_id, lista);
 
     // El dueño se identifica por rol, no por estar activo: aunque se lo
     // desactive, sigue siendo el titular del comercio. Ordenado por
@@ -125,7 +132,10 @@ async function obtenerComercios(): Promise<ResultadoComercios> {
   return {
     comercios: comercios.map((comercio) => ({
       ...comercio,
-      miembros_activos: activosPorComercio.get(comercio.id) ?? 0,
+      usuariosOcupados: contarUsuariosOcupados(
+        miembrosPorComercio.get(comercio.id) ?? [],
+        comercio.plan,
+      ),
       duenio: duenioPorComercio.get(comercio.id) ?? null,
     })),
     error: null,
@@ -259,7 +269,7 @@ export default async function PaginaAdmin() {
                         href={hrefEditar}
                         className="block px-4 py-3 text-neutral-700"
                       >
-                        {comercio.miembros_activos} / {comercio.limite_usuarios}
+                        {comercio.usuariosOcupados} / {comercio.limite_usuarios}
                       </Link>
                     </td>
                     <td className="p-0">

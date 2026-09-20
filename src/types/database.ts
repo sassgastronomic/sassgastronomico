@@ -106,6 +106,10 @@ export interface Database {
           id: string;
           nombre: string;
           email: string | null;
+          // Nombre de usuario del personal sin email real (mostrador/mozo/
+          // sector). Null para el dueño y los admins, que entran con email.
+          // Único en todo el sistema (no por comercio).
+          usuario: string | null;
           es_admin: boolean;
           creado_en: string;
         };
@@ -115,6 +119,7 @@ export interface Database {
           id: string;
           nombre?: string;
           email?: string | null;
+          usuario?: string | null;
           es_admin?: boolean;
           creado_en?: string;
         };
@@ -607,6 +612,28 @@ export interface Database {
       carta_publica: {
         Args: { p_slug: string };
         Returns: CartaPublicaResultado | null;
+      };
+      // Miembros activos que cuentan para `comercios.limite_usuarios`: ver
+      // src/lib/miembros/plan.ts para el espejo en TypeScript de esta misma
+      // regla (usado donde ya se tiene una lista de miembros en memoria y
+      // llamar a esta función por cada comercio sería una consulta de más).
+      usuarios_ocupados: {
+        Args: { p_comercio: string };
+        Returns: number;
+      };
+      // Actualiza `perfiles.nombre` de un miembro del propio comercio,
+      // validando `tiene_rol` adentro (ver supabase/schema.sql: `perfiles`
+      // no tiene policy de UPDATE para esto a propósito).
+      actualizar_nombre_miembro: {
+        Args: { p_miembro_id: string; p_nombre: string };
+        Returns: void;
+      };
+      // ¿Está libre este nombre de usuario? Único en todo el sistema, no
+      // por comercio — ver supabase/schema.sql para por qué hace falta
+      // security definer acá.
+      usuario_disponible: {
+        Args: { p_usuario: string };
+        Returns: boolean;
       };
     };
   };

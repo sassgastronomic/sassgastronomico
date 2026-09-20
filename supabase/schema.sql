@@ -39,6 +39,11 @@ create table perfiles (
   id         uuid primary key references auth.users(id) on delete cascade,
   nombre     text not null default '',
   email      text,
+  -- Nombre de usuario para el personal sin email real (mostrador/mozo/
+  -- sector, ver docs/SCHEMA.md "Identificación del personal"). Null para el
+  -- dueño y para los admins: ellos entran con email. Único en todo el
+  -- sistema (no por comercio): dos comercios no pueden tener "juan" los dos.
+  usuario    text unique check (usuario ~ '^[a-z0-9._]{3,30}$'),
   es_admin   boolean not null default false,
   creado_en  timestamptz not null default now()
 );
@@ -54,14 +59,28 @@ create table miembros (
 );
 create index on miembros (perfil_id);
 
--- Crear perfil automáticamente al registrarse un usuario en Auth
+-- Crear perfil automáticamente al registrarse un usuario en Auth. `usuario`
+-- sale de `raw_user_meta_data` igual que `nombre`: lo manda la app solo para
+-- el personal sin email real (ver src/lib/usuarios/email-interno.ts); para
+-- el dueño y los admins no viaja, así que queda null.
 create or replace function crear_perfil_nuevo_usuario()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  insert into perfiles (id, email, nombre)
-  values (new.id, new.email, coalesce(new.raw_user_meta_data->>'nombre', ''));
+  insert into perfiles (id, email, nombre, usuario)
+  values (
+    new.id,
+    new.email,
+    coalesce(new.raw_user_meta_data->>'nombre', ''),
+    new.raw_user_meta_data->>'usuario'
+  );
   return new;
 end $$;
+
+-- Solo la dispara el trigger al crear un usuario en auth.users (GoTrue):
+-- nadie la llama directo, revoke sin grant (ver "Funciones nuevas" en
+-- docs/SCHEMA.md). Disparar un trigger no requiere EXECUTE aparte: el
+-- revoke de PUBLIC no rompe el trigger.
+revoke execute on function crear_perfil_nuevo_usuario() from public;
 
 create trigger on_auth_user_created
   after insert on auth.users
@@ -138,6 +157,9 @@ begin
   insert into sectores (comercio_id, nombre, orden) values (new.id, 'Cocina', 0);
   return new;
 end $$;
+
+-- Solo la dispara el trigger al crear un comercio: nadie la llama directo.
+revoke execute on function crear_sector_por_defecto() from public;
 
 create trigger comercio_sector_por_defecto
   after insert on comercios
@@ -240,6 +262,12 @@ returns date language sql stable as $$
   from comercios c where c.id = p_comercio;
 $$;
 
+-- Helper interno de asignar_numero_pedido (abajo, security definer: la
+-- llama con sus propios privilegios, no con los de quien insertó el
+-- pedido). Nadie más la llama directo hoy; si el día de mañana hace falta
+-- mostrar la jornada actual desde la app, agregar el grant ahí.
+revoke execute on function jornada_actual(uuid) from public;
+
 create or replace function asignar_numero_pedido()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
@@ -251,6 +279,9 @@ begin
   returning ultimo into new.numero;
   return new;
 end $$;
+
+-- Solo la dispara el trigger al insertar un pedido: nadie la llama directo.
+revoke execute on function asignar_numero_pedido() from public;
 
 create trigger pedido_numero
   before insert on pedidos
@@ -272,6 +303,9 @@ begin
   return new;
 end $$;
 
+-- Solo la dispara el trigger al actualizar un ítem: nadie la llama directo.
+revoke execute on function cerrar_pedido_si_completo() from public;
+
 create trigger item_entregado
   after update of estado on pedido_items
   for each row execute function cerrar_pedido_si_completo();
@@ -284,6 +318,14 @@ returns boolean language sql stable security definer set search_path = public as
   select coalesce((select es_admin from perfiles where id = auth.uid()), false);
 $$;
 
+-- La referencian directo varias policies RLS (comercios_admin, miembros_admin
+-- y las "_admin" generadas en los loops de más abajo): authenticated la
+-- necesita para poder evaluarlas al consultar esas tablas. anon nunca
+-- consulta esas tablas directo en esta app (siempre por carta_publica /
+-- crear_pedido_landing, más abajo), así que no la necesita.
+revoke execute on function es_admin() from public;
+grant execute on function es_admin() to authenticated;
+
 create or replace function plan_permite_rol(p_plan plan_comercio, p_rol rol_miembro)
 returns boolean language sql immutable as $$
   select case
@@ -291,6 +333,12 @@ returns boolean language sql immutable as $$
     else true
   end;
 $$;
+
+-- Solo la llaman tiene_rol y usuarios_ocupados (ambas security definer) por
+-- dentro de su propio cuerpo — corren con los privilegios de esas
+-- funciones, no con los de quien las invocó. Ninguna policy ni la app la
+-- llaman directo, así que no necesita grant a ningún rol externo.
+revoke execute on function plan_permite_rol(plan_comercio, rol_miembro) from public;
 
 -- ¿El usuario actual es miembro activo, del comercio activo, con un rol que su plan permite?
 create or replace function tiene_rol(p_comercio uuid, p_roles rol_miembro[])
@@ -308,10 +356,21 @@ returns boolean language sql stable security definer set search_path = public as
   );
 $$;
 
+-- La referencian directo varias policies RLS (miembros_duenio, items_sector,
+-- las "_duenio" generadas en los loops de más abajo, y el cuerpo de
+-- actualizar_nombre_miembro): authenticated la necesita para evaluarlas.
+revoke execute on function tiene_rol(uuid, rol_miembro[]) from public;
+grant execute on function tiene_rol(uuid, rol_miembro[]) to authenticated;
+
 create or replace function es_miembro(p_comercio uuid)
 returns boolean language sql stable as $$
   select tiene_rol(p_comercio, enum_range(null::rol_miembro));
 $$;
+
+-- La referencian directo las policies "_leer" generadas en los loops de más
+-- abajo (sectores_leer, categorias_leer, etc.) y cuentas_leer/pedidos_leer.
+revoke execute on function es_miembro(uuid) from public;
+grant execute on function es_miembro(uuid) to authenticated;
 
 -- Usuarios que cuentan para el límite: activos y con rol permitido por el plan
 create or replace function usuarios_ocupados(p_comercio uuid)
@@ -320,6 +379,90 @@ returns int language sql stable security definer set search_path = public as $$
   from miembros m join comercios c on c.id = m.comercio_id
   where m.comercio_id = p_comercio and m.activo and plan_permite_rol(c.plan, m.rol);
 $$;
+
+-- Postgres otorga EXECUTE a PUBLIC por defecto al crear una función; revocarlo
+-- solo de anon/authenticated no alcanza, el permiso sigue viniendo de PUBLIC
+-- (ver "Funciones nuevas" en docs/SCHEMA.md). La llama directo la app (uso
+-- del límite en /app/usuarios y /admin, ver src/lib/miembros/plan.ts): sin
+-- anon, no es parte de la API pública.
+revoke execute on function usuarios_ocupados(uuid) from public;
+grant execute on function usuarios_ocupados(uuid) to authenticated;
+
+-- Actualiza el nombre (columna `nombre` de `perfiles`) de un miembro del
+-- propio comercio. Existe porque `perfiles` no tiene una policy de UPDATE
+-- para "soy dueño de un comercio donde esta persona es miembro" — esa tabla
+-- es sensible (tiene `es_admin`), así que en vez de abrir una policy nueva
+-- ahí, la validación de "sos dueño de su comercio" vive acá adentro y la
+-- función solo puede tocar `nombre`.
+create or replace function actualizar_nombre_miembro(p_miembro_id uuid, p_nombre text)
+returns void language plpgsql security definer set search_path = public as $$
+declare
+  v_comercio_id uuid;
+  v_perfil_id   uuid;
+begin
+  select comercio_id, perfil_id into v_comercio_id, v_perfil_id
+  from miembros where id = p_miembro_id;
+
+  if not found then
+    raise exception 'Miembro no encontrado';
+  end if;
+
+  if not tiene_rol(v_comercio_id, '{duenio}') then
+    raise exception 'No autorizado';
+  end if;
+
+  -- Un admin del sistema (perfiles.es_admin) puede, en teoría, ser también
+  -- miembro de un comercio (nada en el esquema lo impide). Sin este chequeo,
+  -- el dueño de ESE comercio podría renombrarlo igual que a cualquier otro
+  -- miembro suyo: los admins no son "de un comercio" (ver docs/SCHEMA.md,
+  -- "Roles"), así que quedan fuera de esta función sin excepción.
+  if exists (select 1 from perfiles where id = v_perfil_id and es_admin) then
+    raise exception 'No autorizado';
+  end if;
+
+  if trim(coalesce(p_nombre, '')) = '' then
+    raise exception 'El nombre no puede estar vacío';
+  end if;
+
+  update perfiles set nombre = trim(p_nombre) where id = v_perfil_id;
+end $$;
+
+-- Sin anon: no es parte de la API pública, solo la llama la app logueada
+-- (ver "Funciones nuevas" en docs/SCHEMA.md sobre por qué el revoke de
+-- PUBLIC es explícito y no alcanza con no otorgar a anon).
+revoke execute on function actualizar_nombre_miembro(uuid, text) from public;
+grant execute on function actualizar_nombre_miembro(uuid, text) to authenticated;
+
+-- ¿Está libre un nombre de usuario? `perfiles.usuario` es único en TODO el
+-- sistema, no por comercio (ver la tabla, más arriba). Security definer
+-- porque las policies de `perfiles` acotan lo que un dueño ve a su propio
+-- comercio (`perfiles_personal`): sin esto, una consulta común dejaría creer
+-- libre un nombre que ya usa el personal de otro comercio.
+--
+-- Por eso mismo, "a quién se le otorga EXECUTE" no alcanza para protegerla:
+-- cualquier `authenticated` (mostrador, mozo, sector — no solo dueños)
+-- podría llamarla directo y usarla para enumerar qué nombres de usuario
+-- existen en TODO el sistema, de cualquier comercio. El chequeo de adentro
+-- acota eso: solo puede preguntar alguien que hoy sea dueño activo de algún
+-- comercio (el único caller legítimo, ver ./nuevo/actions.ts). No elimina
+-- el todo riesgo — un dueño real podría seguir probando nombres de otros
+-- comercios — pero reduce la superficie a cuentas que un admin ya dio de
+-- alta a propósito, en vez de cualquier cuenta de personal.
+create or replace function usuario_disponible(p_usuario text)
+returns boolean language plpgsql stable security definer set search_path = public as $$
+begin
+  if not exists (
+    select 1 from miembros
+    where perfil_id = auth.uid() and rol = 'duenio' and activo
+  ) then
+    raise exception 'No autorizado';
+  end if;
+  return not exists (select 1 from perfiles where usuario = p_usuario);
+end $$;
+
+-- Sin anon: no es parte de la API pública, solo la llama la app logueada.
+revoke execute on function usuario_disponible(text) from public, anon;
+grant  execute on function usuario_disponible(text) to authenticated;
 
 -- Bloquea altas o reactivaciones por encima del límite
 create or replace function validar_limite_usuarios()
@@ -334,6 +477,10 @@ begin
   end if;
   return new;
 end $$;
+
+-- Solo la dispara el trigger al insertar/reactivar un miembro: nadie la
+-- llama directo.
+revoke execute on function validar_limite_usuarios() from public;
 
 create trigger miembros_limite
   before insert or update of activo on miembros
@@ -353,6 +500,9 @@ begin
   end if;
   return new;
 end $$;
+
+-- Solo la dispara el trigger al cambiar el plan: nadie la llama directo.
+revoke execute on function validar_cambio_plan() from public;
 
 create trigger comercios_cambio_plan
   before update of plan on comercios
@@ -485,6 +635,9 @@ returns jsonb language sql stable security definer set search_path = public as $
   where c.slug = p_slug and c.estado = 'activo';
 $$;
 
+-- Parte de la API pública (landing y QR de mesa, sin sesión): sí necesita
+-- anon.
+revoke execute on function carta_publica(text) from public;
 grant execute on function carta_publica(text) to anon, authenticated;
 
 -- ---------------------------------------------------------------------
@@ -546,6 +699,9 @@ begin
   return jsonb_build_object('pedido_id', v_pedido.id, 'numero', v_pedido.numero);
 end $$;
 
+-- Parte de la API pública (pedido desde la landing, sin sesión): sí
+-- necesita anon.
+revoke execute on function crear_pedido_landing(text, text, text, modalidad_pedido, text, text, jsonb) from public;
 grant execute on function crear_pedido_landing(text, text, text, modalidad_pedido, text, text, jsonb) to anon, authenticated;
 
 -- ---------------------------------------------------------------------
