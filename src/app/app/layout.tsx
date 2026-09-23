@@ -40,11 +40,22 @@ function construirSecciones({
     secciones.push({ href: "/app/pedidos", etiqueta: "Pedidos" });
   }
 
+  // Dos pantallas de mesas, para dos tareas distintas: "Atender mesas" es
+  // operativa (abrir cuentas, ver quién está ocupado) y la usa también el
+  // mozo; "Configurar mesas" es administración (crear zonas y mesas,
+  // activar/desactivar) y es solo del dueño — antes había una sola entrada
+  // de menú ("Mesas") que apuntaba a la de administración pero se mostraba
+  // también al mozo, que al entrar rebotaba (la página ya exigía
+  // rol === "duenio").
   if (
     (plan === "salon" || plan === "completo") &&
     (rol === "duenio" || rol === "mozo")
   ) {
-    secciones.push({ href: "/app/mesas", etiqueta: "Mesas" });
+    secciones.push({ href: "/app/salon", etiqueta: "Atender mesas" });
+  }
+
+  if ((plan === "salon" || plan === "completo") && rol === "duenio") {
+    secciones.push({ href: "/app/mesas", etiqueta: "Configurar mesas" });
   }
 
   for (const sector of sectoresVisibles) {

@@ -5,9 +5,9 @@
  * La forma de cada tabla (`Row` / `Insert` / `Update` / `Relationships`) y
  * la clave `Views` (vacía: no se usan todavía) siguen la convención de
  * `supabase gen types typescript`, que es lo que espera el genérico
- * `Database` de `@supabase/supabase-js`. `Functions` solo tiene tipada
- * `carta_publica`, la única que se llama desde la app por ahora — agregar
- * las demás (`crear_pedido_landing`) cuando haga falta usarlas.
+ * `Database` de `@supabase/supabase-js`. `Functions` solo tiene tipadas
+ * las que se llaman desde la app — agregar las demás (`crear_pedido_landing`
+ * todavía no tiene consumidor en el código) cuando haga falta usarlas.
  *
  * Mantener este archivo a mano con el esquema: si se agrega una tabla,
  * columna o función en `supabase/migrations/`, reflejarla acá.
@@ -65,6 +65,16 @@ export type CartaPublicaResultado = {
       adicionales: { id: string; nombre: string; precio_extra: number }[];
     }[];
   }[];
+};
+
+// Un ítem tal como lo manda /app/salon/[id] a `crear_pedido_mozo` — no es
+// la forma de `pedido_items` (eso lo arma la función adentro, con las
+// copias de nombre/precio/sector).
+export type ItemPedidoMozo = {
+  producto_id: string;
+  cantidad: number;
+  nota: string;
+  adicionales: string[];
 };
 
 // ---------------------------------------------------------------------
@@ -675,6 +685,15 @@ export interface Database {
       actualizar_zona_con_mesas: {
         Args: { p_id: string; p_nombre: string; p_activo: boolean };
         Returns: void;
+      };
+      // Crea una ronda de pedido sobre una cuenta abierta: valida rol,
+      // cuenta abierta y disponibilidad de cada producto (mismo criterio
+      // que carta_publica, sector efectivo incluido) en una sola
+      // transacción — ver src/app/app/salon/[id]/actions.ts y
+      // supabase/migrations/.
+      crear_pedido_mozo: {
+        Args: { p_cuenta_id: string; p_items: ItemPedidoMozo[] };
+        Returns: { pedido_id: string; numero: number };
       };
     };
   };
