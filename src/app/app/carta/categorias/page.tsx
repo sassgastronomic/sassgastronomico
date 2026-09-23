@@ -11,6 +11,7 @@ type CategoriaListado = {
   nombre: string;
   activo: boolean;
   sector: string;
+  sectorActivo: boolean;
   productos: number;
 };
 
@@ -20,6 +21,8 @@ type ResultadoCategorias =
 
 const ESTILO_BOTON_ORDEN =
   "rounded-md border border-neutral-300 px-2 py-1 text-xs text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40";
+const ESTILO_BADGE_AMBAR =
+  "ml-2 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium leading-none text-amber-700 bg-amber-50 ring-1 ring-inset ring-amber-600/20";
 
 /**
  * Categorías del comercio (con el nombre de su sector embebido por la FK
@@ -31,7 +34,7 @@ async function obtenerCategorias(comercioId: string): Promise<ResultadoCategoria
 
   const { data: categorias, error: errorCategorias } = await supabase
     .from("categorias")
-    .select("id, nombre, activo, sectores(nombre)")
+    .select("id, nombre, activo, sectores(nombre, activo)")
     .eq("comercio_id", comercioId)
     .order("orden", { ascending: true })
     .order("nombre", { ascending: true });
@@ -70,6 +73,7 @@ async function obtenerCategorias(comercioId: string): Promise<ResultadoCategoria
       nombre: categoria.nombre,
       activo: categoria.activo,
       sector: categoria.sectores?.nombre ?? "—",
+      sectorActivo: categoria.sectores?.activo ?? false,
       productos: productosPorCategoria.get(categoria.id) ?? 0,
     })),
     error: null,
@@ -198,6 +202,11 @@ export default async function PaginaCategorias() {
                         className="block px-4 py-3 text-neutral-700"
                       >
                         {categoria.sector}
+                        {!categoria.sectorActivo && (
+                          <span className={ESTILO_BADGE_AMBAR}>
+                            Sector inactivo
+                          </span>
+                        )}
                       </Link>
                     </td>
                     <td className="p-0">

@@ -24,9 +24,6 @@ export type EstadoEditarAdicional = {
     // igual que pasaría con cualquier otro campo no controlado.
     productosAsignados: string[];
   };
-  // Aviso "¿estás seguro?" (asignado a productos) que todavía no bloquea
-  // nada — a diferencia de `error`, que sí impide guardar.
-  confirmacion?: string;
 };
 
 /**
@@ -37,11 +34,12 @@ export type EstadoEditarAdicional = {
  *
  * Reglas de negocio (ver docs/SCHEMA.md y la tarea):
  * - No se borra, se desactiva.
- * - Si está asignado a productos activos, se avisa cuántos antes de
- *   desactivar (no bloquea: se puede confirmar igual). Mismo mecanismo que
- *   sectores/categorías: un segundo botón de submit con
- *   `name="confirmar" value="true"`, no un input oculto controlado por
- *   estado.
+ * - Desactivar estando asignado a productos activos es directo, sin aviso:
+ *   se sacó el paso de confirmación (mismo criterio que zonas) porque el
+ *   <select> de Estado, al ser controlado, no sobrevive el reset nativo
+ *   que React aplica al <form> en cada envío — con dos botones de submit
+ *   visibles (Guardar / Confirmar) el segundo click terminaba mandando el
+ *   valor que el navegador ya había reseteado, no el elegido.
  * - Nombres duplicados: sin distinguir mayúsculas, en memoria, solo contra
  *   otros adicionales activos.
  */
@@ -53,7 +51,6 @@ export async function actualizarAdicional(
   const nombre = String(formData.get("nombre") ?? "").trim();
   const precioExtraTexto = String(formData.get("precio_extra") ?? "");
   const activoTexto = String(formData.get("activo") ?? "");
-  const confirmar = formData.get("confirmar") === "true";
   const productosSeleccionados = formData.getAll("producto_id").map(String);
 
   if (!id) {
@@ -95,7 +92,7 @@ export async function actualizarAdicional(
 
   const { data: adicionalActual, error: errorAdicionalActual } = await supabase
     .from("adicionales")
-    .select("id, activo")
+    .select("id")
     .eq("id", id)
     .eq("comercio_id", contexto.comercio.id)
     .single();
@@ -127,32 +124,6 @@ export async function actualizarAdicional(
       campo: "nombre",
       valores,
     };
-  }
-
-  const seDesactiva = adicionalActual.activo && !activo;
-
-  if (seDesactiva && !confirmar) {
-    const { data: asignados, error: errorAsignados } = await supabase
-      .from("producto_adicionales")
-      .select("producto_id, productos(activo)")
-      .eq("adicional_id", id)
-      .eq("comercio_id", contexto.comercio.id);
-
-    if (errorAsignados) {
-      return { error: "No se pudo validar. Probá de nuevo.", campo: "activo", valores };
-    }
-
-    const cantidad = asignados.filter((a) => a.productos?.activo).length;
-    if (cantidad > 0) {
-      const plural = cantidad === 1 ? "" : "s";
-      return {
-        valores,
-        confirmacion:
-          `Este adicional está asignado a ${cantidad} producto${plural} activo${plural}. ` +
-          `Van a dejar de ofrecerlo hasta que lo reactives. ` +
-          `¿Desactivar igual?`,
-      };
-    }
   }
 
   // RLS: `adicionales_duenio` exige `tiene_rol(comercio_id, '{duenio}')`.

@@ -150,8 +150,8 @@ erDiagram
 **`productos`**: `id`, `comercio_id`, `categoria_id`, `nombre`, `descripcion`, `precio`, `imagen_url`, `sector_id`, `sin_stock`, `activo`, `orden`.
 
 - `sin_stock = true` → se muestra en gris con "Sin stock" y no se puede pedir.
-- `activo = false` → no se muestra.
-- `sector_id`: la columna existe y la siguen usando las copias en `pedido_items` (a qué pantalla va cada ítem) y `crear_pedido_landing`, pero **la interfaz de administración del comercio siempre la deja en `null`** al crear o editar un producto. Decisión de negocio: un producto se prepara siempre en el sector de su categoría; si un local necesita que algo salga de otro sector, crea una categoría aparte para eso en vez de pisarle el sector a un producto puntual. Si en algún momento se necesita volver a permitir un sector propio por producto, la columna ya está lista.
+- `activo = false` → no se muestra (ver "Disponibilidad efectiva" más abajo: no alcanza con este campo solo).
+- `sector_id`: la columna existe y la siguen usando las copias en `pedido_items` (a qué pantalla va cada ítem) y `crear_pedido_landing`, pero **la interfaz de administración del comercio siempre la deja en `null`** al crear o editar un producto. Decisión de negocio: un producto se prepara siempre en el sector de su categoría; si un local necesita que algo salga de otro sector, crea una categoría aparte para eso en vez de pisarle el sector a un producto puntual. Si en algún momento se necesita volver a permitir un sector propio por producto, la columna ya está lista. Mientras tanto, el "sector efectivo" de un producto es siempre `coalesce(productos.sector_id, categorias.sector_id)` — todo el código que decide disponibilidad calcula por ahí, nunca asume que es directamente el de la categoría.
 
 **`adicionales`**: `id`, `comercio_id`, `nombre` ("Extra cheddar", "Sin cebolla"), `precio_extra` (0 si es gratis), `activo`. Se crean una vez y se reutilizan.
 
@@ -159,9 +159,24 @@ erDiagram
 
 Futuro (no Plan 1): grupos de adicionales con elección única ("Punto: jugoso / a punto / cocido").
 
+### Disponibilidad efectiva (sector → categoría → producto → adicional)
+
+**Regla:** un sector, categoría o producto solo cuenta como disponible si **todos** los niveles de los que depende están activos — no alcanza con que el nivel propio lo esté. Ningún nivel se auto-desactiva en cascada al apagar el de arriba (a diferencia de zonas → mesas, ver más abajo): cada función/pantalla calcula "¿está efectivamente disponible?" mirando toda la cadena, sin reescribir `activo` de nada.
+
+Para el dueño: *"Si apagás un sector, se apaga todo lo que cuelga de él — sus categorías, sus productos, y la posibilidad de que alguien los pida — sin que tengas que tocar cada cosa una por una; para prenderlas de nuevo alcanza con prender el sector, todo lo demás vuelve a aparecer tal como lo dejaste."*
+
+- **Al cliente (landing y QR):** `carta_publica` filtra categorías por `categorias.activo` y el `activo` de su propio sector (`categorias.sector_id`), y productos por `productos.activo` y el `activo` de su sector efectivo. `crear_pedido_landing` valida esa misma cadena completa (producto, su categoría, su sector efectivo) antes de aceptar un ítem — antes solo miraba `productos.activo` y `sin_stock`, así que un producto con la categoría o el sector apagados igual se podía pedir.
+- **En administración:** todo sigue visible siempre (activo o no), para poder reactivarlo — pero cada listado marca el estado de los niveles de arriba, no solo el propio (ej: una categoría activa con su sector inactivo se marca "Sector inactivo" en `/app/carta/categorias`, aunque ella misma no se toque).
+- **Pedidos ya existentes:** no se alteran. `pedido_items`/`pedido_item_adicionales` guardan copias de nombre, precio y sector en el momento del pedido (regla de oro #3) — desactivar algo después no cambia el historial.
+- **`/app/sector/[id]`:** a propósito no bloquea el acceso a un sector inactivo (dueño o miembro asignado igual entran) — es una pantalla para ver y accionar pedidos ya tomados, no un formulario de edición, y un sector recién apagado puede tener pedidos pendientes de entregar. Solo avisa que está inactivo.
+
+Por qué no hay cascada física acá (a diferencia de zonas → mesas): son tres niveles y potencialmente cientos de productos. Escribir `activo = false` en cascada perdería el estado que el dueño ya configuró a mano en cada uno (un producto ya inactivo por otro motivo quedaría indistinguible de "inactivo por su sector"), y al reactivar no habría forma de saber cuáles reactivar de verdad.
+
 ### Salón y pedidos (sprints 3 a 6)
 
-**`mesas`**: `id`, `comercio_id`, `nombre` ("Mesa 4"), `activo`, `orden`.
+**`zonas`**: `id`, `comercio_id`, `nombre` ("Salón", "Terraza"), `orden`, `activo`. Desactivar una zona arrastra `activo = false` a todas sus mesas, y reactivarla las vuelve a activar a todas (sin importar si alguna estaba desactivada aparte) — lo hace, en una sola transacción, la función `actualizar_zona_con_mesas`. No se puede desactivar la última zona activa del comercio, ni una zona con una mesa con cuenta abierta. Mientras una mesa hereda "Inactiva" de su zona, no se puede editar individualmente (`/app/mesas/[id]` redirige a `/app/mesas`).
+
+**`mesas`**: `id`, `comercio_id`, `zona_id` (→ `zonas`), `nombre` ("Mesa 4"), `activo`, `orden`.
 
 **`cuentas`** (mesa abierta): `id`, `comercio_id`, `mesa_id`, `mozo_id` (→ `perfiles`), `estado` (`abierta` | `cerrada`), `abierta_en`, `cerrada_en`. Solo una cuenta abierta por mesa.
 

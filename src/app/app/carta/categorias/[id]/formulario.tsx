@@ -146,21 +146,6 @@ export function FormularioEditarCategoria({
         )}
       </div>
 
-      {estado.confirmacion && (
-        <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <p className="mb-3">{estado.confirmacion}</p>
-          <button
-            type="submit"
-            name="confirmar"
-            value="true"
-            disabled={pendiente}
-            className="rounded-md bg-amber-800 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-amber-900 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            Sí, desactivar de todos modos
-          </button>
-        </div>
-      )}
-
       {estado.error && !estado.campo && (
         <p
           role="alert"

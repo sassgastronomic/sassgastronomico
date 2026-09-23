@@ -9,9 +9,18 @@ import { crearClienteServidor } from "@/lib/supabase/server";
  * `miembro_sectores` define qué sector ve cada miembro con rol `sector`
  * (ver docs/SCHEMA.md, reemplaza el viejo matcheo por nombre).
  *
- * Acceso: dueño (cualquier sector activo del comercio) o rol `sector` con
- * este sector puntual asignado. Otros roles no llegan acá ni por el menú,
- * pero se valida igual por si alguien entra directo por la URL.
+ * Acceso: dueño o rol `sector` con este sector puntual asignado, esté
+ * activo o no. Otros roles no llegan acá ni por el menú, pero se valida
+ * igual por si alguien entra directo por la URL.
+ *
+ * A propósito NO se bloquea un sector inactivo (a diferencia de una mesa
+ * cuya zona está inactiva, que sí se bloquea): esta pantalla va a mostrar
+ * y dejar accionar pedidos ya tomados, no editar datos — un sector
+ * apagado puede seguir teniendo pedidos pendientes de entregar, y
+ * bloquear la pantalla dejaría esos pedidos sin nadie que los vea. Solo
+ * se avisa que está inactivo, para que no se lo confunda con uno
+ * operando con normalidad (mismo criterio de "no cascada, cada pantalla
+ * avisa lo que corresponda" del resto de la carta — ver docs/SCHEMA.md).
  */
 export default async function PaginaSector({
   params,
@@ -38,7 +47,7 @@ export default async function PaginaSector({
   const supabase = await crearClienteServidor();
   const { data: sector } = await supabase
     .from("sectores")
-    .select("id, nombre")
+    .select("id, nombre, activo")
     .eq("id", id)
     .eq("comercio_id", contexto.comercio.id)
     .single();
@@ -48,8 +57,16 @@ export default async function PaginaSector({
   }
 
   return (
-    <h1 className="text-xl font-semibold text-neutral-900">
-      {sector.nombre}
-    </h1>
+    <div className="space-y-3">
+      <h1 className="text-xl font-semibold text-neutral-900">
+        {sector.nombre}
+      </h1>
+      {!sector.activo && (
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Este sector está inactivo. Puede tener pedidos pendientes de antes
+          de apagarlo, pero no debería estar recibiendo pedidos nuevos.
+        </p>
+      )}
+    </div>
   );
 }

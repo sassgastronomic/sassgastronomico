@@ -13,9 +13,6 @@ export type EstadoEditarCategoria = {
   error?: string;
   campo?: CampoEditarCategoria;
   valores?: { nombre: string; sectorId: string; activo: string };
-  // Aviso "¿estás seguro?" (tiene productos activos) que todavía no
-  // bloquea nada — a diferencia de `error`, que sí impide guardar.
-  confirmacion?: string;
 };
 
 /**
@@ -25,10 +22,12 @@ export type EstadoEditarCategoria = {
  *
  * Reglas de negocio (ver docs/SCHEMA.md y la tarea):
  * - No se borra, se desactiva.
- * - Si tiene productos activos, se avisa cuántos antes de desactivar (no
- *   bloquea: se puede confirmar igual). Mismo mecanismo que sectores: un
- *   segundo botón de submit con `name="confirmar" value="true"`, no un
- *   input oculto controlado por estado.
+ * - Desactivar con productos activos es directo, sin aviso: se sacó el
+ *   paso de confirmación (mismo criterio que zonas) porque el <select> de
+ *   Estado, al ser controlado, no sobrevive el reset nativo que React
+ *   aplica al <form> en cada envío — con dos botones de submit visibles
+ *   (Guardar / Confirmar) el segundo click terminaba mandando el valor que
+ *   el navegador ya había reseteado, no el elegido.
  * - El sector elegido tiene que existir y ser de este comercio, pero no
  *   hace falta que esté activo: el <select> del form incluye también el
  *   sector actual de la categoría aunque ya no esté activo, para no
@@ -42,7 +41,6 @@ export async function actualizarCategoria(
   const nombre = String(formData.get("nombre") ?? "").trim();
   const sectorId = String(formData.get("sector_id") ?? "");
   const activoTexto = String(formData.get("activo") ?? "");
-  const confirmar = formData.get("confirmar") === "true";
 
   if (!id) {
     return { error: "Falta la categoría a editar." };
@@ -76,7 +74,7 @@ export async function actualizarCategoria(
 
   const { data: categoriaActual, error: errorCategoriaActual } = await supabase
     .from("categorias")
-    .select("id, activo")
+    .select("id")
     .eq("id", id)
     .eq("comercio_id", contexto.comercio.id)
     .single();
@@ -124,33 +122,6 @@ export async function actualizarCategoria(
       campo: "nombre",
       valores,
     };
-  }
-
-  const seDesactiva = categoriaActual.activo && !activo;
-
-  if (seDesactiva && !confirmar) {
-    const { data: productos, error: errorProductos } = await supabase
-      .from("productos")
-      .select("id")
-      .eq("categoria_id", id)
-      .eq("comercio_id", contexto.comercio.id)
-      .eq("activo", true);
-
-    if (errorProductos) {
-      return { error: "No se pudo validar. Probá de nuevo.", campo: "activo", valores };
-    }
-
-    const cantidad = productos.length;
-    if (cantidad > 0) {
-      const plural = cantidad === 1 ? "" : "s";
-      return {
-        valores,
-        confirmacion:
-          `Esta categoría tiene ${cantidad} producto${plural} activo${plural}. ` +
-          `Van a dejar de mostrarse en la carta hasta que la reactives. ` +
-          `¿Desactivar igual?`,
-      };
-    }
   }
 
   // RLS: `categorias_duenio` exige `tiene_rol(comercio_id, '{duenio}')`.

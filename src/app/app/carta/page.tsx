@@ -157,7 +157,7 @@ async function obtenerVistaPrevia(
 
   const { data: categorias, error: errorCategorias } = await supabase
     .from("categorias")
-    .select("id, nombre, activo, sectores(nombre)")
+    .select("id, nombre, activo, sector_id, sectores(nombre, activo)")
     .eq("comercio_id", comercioId)
     .order("orden", { ascending: true })
     .order("nombre", { ascending: true });
@@ -171,7 +171,9 @@ async function obtenerVistaPrevia(
 
   const { data: productos, error: errorProductos } = await supabase
     .from("productos")
-    .select("id, categoria_id, nombre, descripcion, precio, sin_stock, activo")
+    .select(
+      "id, categoria_id, nombre, descripcion, precio, sin_stock, activo, sector_id",
+    )
     .eq("comercio_id", comercioId)
     .order("orden", { ascending: true })
     .order("nombre", { ascending: true });
@@ -194,6 +196,28 @@ async function obtenerVistaPrevia(
       error: "No se pudo cargar la vista previa. Probá de nuevo en un momento.",
     };
   }
+
+  // Mapa propio (no solo lo que traen las categorías): un producto puede,
+  // en teoría, pisar el sector de su categoría con su propio `sector_id`
+  // (columna que la interfaz no expone todavía, ver docs/SCHEMA.md) — ese
+  // sector podría no ser el de ninguna categoría cargada acá.
+  const { data: sectores, error: errorSectores } = await supabase
+    .from("sectores")
+    .select("id, activo")
+    .eq("comercio_id", comercioId);
+
+  if (errorSectores) {
+    return {
+      categorias: null,
+      error: "No se pudo cargar la vista previa. Probá de nuevo en un momento.",
+    };
+  }
+
+  const sectorActivoPorId = new Map(
+    sectores.map((sector) => [sector.id, sector.activo]),
+  );
+  const sectorActivo = (sectorId: string) =>
+    sectorActivoPorId.get(sectorId) ?? false;
 
   const adicionalesPorProducto = new Map<
     string,
@@ -222,15 +246,24 @@ async function obtenerVistaPrevia(
 
     const productosDeCategoria = productosPorCategoria.get(categoria.id) ?? [];
 
+    // Una categoría no tiene "sector efectivo" propio: siempre es el suyo
+    // (`sector_id`, obligatorio) — a diferencia de un producto, que puede
+    // pisarlo con el suyo (ver el mapa de sectores más arriba).
+    const categoriaVisible = categoria.activo && sectorActivo(categoria.sector_id);
+
     return {
       id: categoria.id,
       // Preferir el nombre que devuelve la función cuando está disponible:
       // es la fuente de verdad de lo publicado.
       nombre: categoriaPublica?.nombre ?? categoria.nombre,
-      sectorNombre: categoria.sectores?.nombre ?? "—",
-      visible: categoria.activo,
+      sectorNombre:
+        (categoria.sectores?.nombre ?? "—") +
+        (categoria.sectores && !categoria.sectores.activo ? " (inactivo)" : ""),
+      visible: categoriaVisible,
       productos: productosDeCategoria.map((producto) => {
-        const deberiaSerVisible = categoria.activo && producto.activo;
+        const sectorEfectivo = producto.sector_id ?? categoria.sector_id;
+        const deberiaSerVisible =
+          categoriaVisible && producto.activo && sectorActivo(sectorEfectivo);
         const productoPublico = deberiaSerVisible
           ? (categoriaPublica?.productos.find((p) => p.id === producto.id) ??
             null)

@@ -23,9 +23,11 @@ const formateadorPrecio = new Intl.NumberFormat("es-AR", {
 
 /**
  * Adicionales del comercio más, de una consulta aparte a
- * `producto_adicionales` (con el estado del producto embebido por la FK
- * `producto_id`), en cuántos productos activos está asignado cada uno.
- * Nada de una consulta por fila.
+ * `producto_adicionales`, en cuántos productos *alcanzables* está asignado
+ * cada uno — no alcanza con que el producto esté activo: su categoría y el
+ * sector de esa categoría (o el propio del producto, si lo pisa) también
+ * tienen que estarlo, mismo criterio que carta_publica. Nada de una
+ * consulta por fila.
  */
 async function obtenerAdicionales(
   comercioId: string,
@@ -47,7 +49,9 @@ async function obtenerAdicionales(
 
   const { data: asignaciones, error: errorAsignaciones } = await supabase
     .from("producto_adicionales")
-    .select("adicional_id, productos(activo)")
+    .select(
+      "adicional_id, productos(activo, sector_id, categorias(activo, sector_id, sectores(activo)))",
+    )
     .eq("comercio_id", comercioId);
 
   if (errorAsignaciones) {
@@ -57,9 +61,32 @@ async function obtenerAdicionales(
     };
   }
 
+  const { data: sectores, error: errorSectores } = await supabase
+    .from("sectores")
+    .select("id, activo")
+    .eq("comercio_id", comercioId);
+
+  if (errorSectores) {
+    return {
+      adicionales: null,
+      error: "No se pudieron cargar los adicionales. Probá de nuevo en un momento.",
+    };
+  }
+
+  const sectorActivoPorId = new Map(
+    sectores.map((sector) => [sector.id, sector.activo]),
+  );
+
   const productosPorAdicional = new Map<string, number>();
   for (const asignacion of asignaciones) {
-    if (!asignacion.productos?.activo) continue;
+    const producto = asignacion.productos;
+    const categoria = producto?.categorias;
+    if (!producto?.activo || !categoria?.activo || !categoria.sectores?.activo) {
+      continue;
+    }
+    const sectorEfectivo = producto.sector_id ?? categoria.sector_id;
+    if (!(sectorActivoPorId.get(sectorEfectivo) ?? false)) continue;
+
     productosPorAdicional.set(
       asignacion.adicional_id,
       (productosPorAdicional.get(asignacion.adicional_id) ?? 0) + 1,

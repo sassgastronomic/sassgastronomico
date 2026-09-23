@@ -50,8 +50,13 @@ src/
 │       ├── carta/               # ABM sectores → categorías → productos (+ adicionales)
 │       │                       # y la vista previa de lo que ve el cliente.
 │       ├── usuarios/            # ABM del personal del comercio (solo rol duenio).
-│       ├── mesas/page.tsx       # Placeholder — sprints 3 a 6, ver docs/SCHEMA.md.
-│       ├── pedidos/page.tsx     # Placeholder — ídem.
+│       ├── mesas/                # ABM de mesas (solo rol duenio, solo plan salon/completo).
+│       │                        # El alta tiene dos modos: una mesa por nombre, o varias
+│       │                        # numeradas de una (prefijo + rango). Cada mesa pertenece a
+│       │                        # una zona (mesas/zonas/, ABM aparte con el mismo patrón
+│       │                        # que sectores); el listado se agrupa por zona. Sin
+│       │                        # operativa de cuentas/pedidos todavía — eso es lo que sigue.
+│       ├── pedidos/page.tsx     # Placeholder — sprints 3 a 6, ver docs/SCHEMA.md.
 │       └── sector/[id]/page.tsx # Placeholder con autorización real ya armada (dueño o
 │                                # rol sector con ese sector asignado), sin funcionalidad
 │                                # de pedidos todavía.
@@ -164,9 +169,23 @@ RLS es el motivo por el que esto es defendible incluso si alguien se olvida de e
 
 ---
 
+## Disponibilidad efectiva: sector → categoría → producto → adicional
+
+Ningún nivel de la carta se auto-desactiva en cascada al apagar el de arriba (a diferencia de zonas → mesas, que sí cascadea — ver más abajo). En cambio, cada función y cada pantalla calcula "¿está esto efectivamente disponible?" mirando toda la cadena, sin reescribir `activo` de nada:
+
+> *"Si apagás un sector, se apaga todo lo que cuelga de él — sus categorías, sus productos, y la posibilidad de que alguien los pida — sin que tengas que tocar cada cosa una por una; para prenderlas de nuevo alcanza con prender el sector, todo lo demás vuelve a aparecer tal como lo dejaste."*
+
+Por qué no hay cascada física acá: son tres niveles y potencialmente cientos de productos. Escribir `activo = false` en cascada (como sí se hace en zonas → mesas, dos niveles y volumen chico) perdería el estado que el dueño ya configuró a mano en cada producto, y al reactivar el sector no habría forma de saber cuáles reactivar de verdad.
+
+La fuente de verdad de "disponible" es una sola función SQL, `carta_publica` — reusada, nunca reimplementada en TypeScript: la vista previa de `/app/carta` la llama por RPC en vez de rearmar el filtro a mano, y cuando exista una pantalla de mozo para cargar pedidos manualmente, tiene que hacer lo mismo. `crear_pedido_landing` valida la misma cadena completa antes de aceptar un ítem de pedido. El "sector efectivo" de un producto es siempre `coalesce(productos.sector_id, categorias.sector_id)` (ver docs/SCHEMA.md) — nunca se asume que es directamente el de la categoría.
+
+Detalle completo (qué mira cada función, tabla de combinaciones, y por qué `/app/sector/[id]` no bloquea un sector inactivo) en docs/SCHEMA.md, sección "Disponibilidad efectiva".
+
+---
+
 ## Patrón repetido: cómo está armado un ABM
 
-Los cinco ABM del proyecto (sectores, categorías, productos, adicionales, usuarios) están armados igual. Ejemplo con **sectores** (`src/app/app/carta/sectores/`), el más simple:
+Los ABM del proyecto (sectores, categorías, productos, adicionales, usuarios, mesas, zonas) están armados igual. Ejemplo con **sectores** (`src/app/app/carta/sectores/`), el más simple:
 
 ```
 sectores/
@@ -190,13 +209,18 @@ sectores/
     ├── formulario.tsx       # Igual que nuevo/, más el flujo de confirmación.
     └── actions.ts           # actualizarSector(): mismo orden de validación, más una
                               # regla de negocio ("no se puede desactivar el último sector
-                              # activo") y un aviso no bloqueante si tiene categorías
-                              # asignadas (confirmación con un segundo botón submit
-                              # `name="confirmar" value="true"`, no un input oculto atado a
-                              # estado de React — evita carreras de render).
+                              # activo"). Desactivar con categorías asignadas es directo,
+                              # sin aviso — ver por qué en "Un aviso que hubo y ya no está"
+                              # más abajo.
 ```
 
 Categorías y productos agregan sobre esto: relación con su padre (categoría → sector, producto → categoría), y productos además la asignación de adicionales (diff entre lo que ya había y lo tildado, igual que la asignación inversa en adicionales). Usuarios agrega la parte de Auth (crear/borrar usuario, contraseña, rollback) — ver "Modelo de acceso" abajo.
+
+Mesas y zonas (`src/app/app/mesas/`) agregan sobre esto: el alta de mesas tiene **dos modos** en la misma pantalla (una mesa por nombre, o varias numeradas de una con prefijo + rango — dos `<form>` con su propio `useActionState` cada uno, mismo mecanismo que el modo generar/escribir contraseña en usuarios), y bloqueos duros en vez de avisos: no se puede desactivar una mesa con una cuenta abierta, ni una zona que sea la última activa del comercio o que tenga una mesa con cuenta abierta. Zonas además cascadea: desactivar una zona desactiva todas sus mesas (y reactivarla las reactiva a todas), en una sola transacción vía la función `actualizar_zona_con_mesas` — mientras una mesa hereda "Inactiva" de su zona, `/app/mesas/[id]` rechaza editarla directamente.
+
+### Un aviso que hubo y ya no está
+
+Sectores, categorías y adicionales tenían un paso de confirmación ("esta categoría tiene productos activos, ¿desactivar igual?") con un segundo botón de submit. Se sacó: el `<select>` de Estado, al ser un campo controlado, no sobrevive el reset nativo que React aplica a un `<form action={...}>` en cada envío (React nunca sincroniza `defaultSelected` en un `<select>` controlado, a diferencia de `defaultValue` en un `<input>`, que sí sincroniza en cada render) — con dos botones de submit visibles a la vez, confirmar después del primer envío terminaba mandando el valor que el navegador ya había reseteado, no el elegido. El mismo problema existía en zonas y se solucionó ahí primero; en los otros tres se optó por sacar el paso intermedio en vez de parchearlo, mismo criterio que terminó ganando en zonas. Desactivar con hijos activos asignados es hoy directo, sin aviso, en los cuatro.
 
 Si se entiende sectores de punta a punta, los otros cuatro son la misma estructura con más columnas y una relación más.
 
@@ -211,10 +235,10 @@ flowchart LR
 ```
 
 - **Admin del producto** (`perfiles.es_admin = true`): no pertenece a ningún comercio. Crea comercios y su dueño desde `/admin/comercios/nuevo` (`src/app/admin/comercios/nuevo/actions.ts`). El dueño se crea con **email real** y contraseña que el admin define.
-- **Dueño** (`miembros.rol = 'duenio'`): uno por comercio (índice único parcial en la base). Entra con **email real** — es el titular del servicio, tiene que poder recuperar el acceso por su cuenta. Ve y hace todo en su comercio: carta completa, usuarios, y a futuro mesas/pedidos. Crea a su personal desde `/app/usuarios/nuevo`.
+- **Dueño** (`miembros.rol = 'duenio'`): uno por comercio (índice único parcial en la base). Entra con **email real** — es el titular del servicio, tiene que poder recuperar el acceso por su cuenta. Ve y hace todo en su comercio: carta completa, usuarios, el ABM de mesas (si el plan incluye salón), y a futuro pedidos. Crea a su personal desde `/app/usuarios/nuevo`.
 - **Personal** (`mostrador`, `mozo`, `sector`): no tiene email real. Entra con **nombre de usuario** (`perfiles.usuario`, único en todo el sistema — ver `docs/SCHEMA.md`, "Identificación del personal"). Por atrás se le arma un email interno (`usuario@usuarios.local`, `src/lib/usuarios/email-interno.ts`) solo porque Supabase Auth exige un email; ese email nunca se muestra en ninguna pantalla.
   - `mostrador`: pedidos de la landing y take away (a futuro — hoy es un placeholder).
-  - `mozo`: mesas y rondas (a futuro; requiere plan `salon` o `completo`, si no el rol ni se ofrece al crear).
+  - `mozo`: rondas y cuentas de mesa (a futuro — el ABM de mesas en sí ya está, pero abrir/cerrar una cuenta y cargar pedidos todavía no; requiere plan `salon` o `completo`, si no el rol ni se ofrece al crear).
   - `sector`: por diseño de base ve y actualiza los ítems de los sectores que tiene asignados en `miembro_sectores` (la policy `items_sector` ya existe y ya lo permite) — no todos los sectores del comercio, solo los suyos. La pantalla (`/app/sector/[id]/page.tsx`) hoy es un placeholder: valida la autorización real y muestra el nombre del sector, pero todavía no lista ítems ni permite cambiarles el estado.
 - Nadie puede asignarse ni asignar el rol `duenio` desde `/app/usuarios` — la lista de roles ofrecidos (`RolAsignable` en `src/lib/usuarios/validacion.ts`) ni siquiera lo incluye, y la policy `miembros_duenio` lo rechaza en la base aunque se lo fuerce.
 - El login (`src/app/(auth)/login/actions.ts`) acepta ambos formatos en el mismo campo: si lo tipeado tiene `@` se usa tal cual como email; si no, se arma el email interno. No hay ambigüedad posible porque el formato de nombre de usuario nunca incluye `@`.
@@ -243,5 +267,5 @@ Repaso hecho con el equipo (2026-09-20): de los puntos que siguen, el cliente de
 - No hay suite de tests en el proyecto todavía. Verificar cambios corriendo `npx tsc --noEmit`, `npx eslint src --max-warnings=0` y `npx next build`, y probando a mano en el browser.
 - `src/lib/supabase/client.ts` (cliente de navegador) está escrito pero sin usar — se va a empezar a usar cuando se sume tiempo real (Realtime de Supabase, ver `docs/SCHEMA.md`).
 - `src/app/layout.tsx` (shell HTML, fuentes) sigue siendo el de `create-next-app` (`lang="en"`, título "Create Next App"). `src/app/page.tsx` ya no lo es: redirige según quién sos.
-- No existe todavía una ruta pública de landing (`/{slug}`) ni de QR de mesa, aunque el modelo de datos y las funciones de base (`carta_publica`, `crear_pedido_landing`) ya están pensadas para eso — llegan con los sprints de mesas/pedidos.
+- No existe todavía una ruta pública de landing (`/{slug}`) ni de QR de mesa, aunque el modelo de datos y las funciones de base (`carta_publica`, `crear_pedido_landing`) ya están pensadas para eso. Tampoco existe la operativa de mesas (abrir/cerrar una cuenta, cargar una ronda, marcar ítems) — el ABM de mesas (`/app/mesas`, nombre y activo/inactivo) ya está, es el paso previo.
 - `src/app/admin/comercios/nuevo/page.tsx` se deja con su estructura propia (sin `formulario.tsx` separado) a propósito, no por descuido — ver "Convención de nombres" más arriba.

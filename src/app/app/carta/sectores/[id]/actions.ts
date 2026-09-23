@@ -13,9 +13,6 @@ export type EstadoEditarSector = {
   error?: string;
   campo?: CampoEditarSector;
   valores?: { nombre: string; activo: string };
-  // Aviso "¿estás seguro?" (tiene categorías asignadas) que todavía no
-  // bloquea nada — a diferencia de `error`, que sí impide guardar.
-  confirmacion?: string;
 };
 
 /**
@@ -27,12 +24,12 @@ export type EstadoEditarSector = {
  * Reglas de negocio (ver docs/SCHEMA.md y la tarea):
  * - No se borra, se desactiva.
  * - No se puede desactivar el último sector activo del comercio.
- * - Si tiene categorías activas asignadas, se avisa cuántas antes de
- *   desactivar (no bloquea: el admin puede confirmar igual). La
- *   confirmación viaja como un segundo botón de submit con
- *   `name="confirmar" value="true"` — no con un input oculto controlado
- *   por estado, para no depender de que React re-renderice antes de que
- *   el navegador junte los datos del formulario.
+ * - Desactivar con categorías activas asignadas es directo, sin aviso: se
+ *   sacó el paso de confirmación (mismo criterio que zonas) porque el
+ *   <select> de Estado, al ser controlado, no sobrevive el reset nativo
+ *   que React aplica al <form> en cada envío — con dos botones de submit
+ *   visibles (Guardar / Confirmar) el segundo click terminaba mandando el
+ *   valor que el navegador ya había reseteado, no el elegido.
  */
 export async function actualizarSector(
   _estadoPrevio: EstadoEditarSector,
@@ -41,7 +38,6 @@ export async function actualizarSector(
   const id = String(formData.get("id") ?? "");
   const nombre = String(formData.get("nombre") ?? "").trim();
   const activoTexto = String(formData.get("activo") ?? "");
-  const confirmar = formData.get("confirmar") === "true";
 
   if (!id) {
     return { error: "Falta el sector a editar." };
@@ -125,33 +121,6 @@ export async function actualizarSector(
         campo: "activo",
         valores,
       };
-    }
-
-    // Avisar si tiene categorías activas asignadas — sin bloquear, salvo
-    // que ya se haya confirmado.
-    if (!confirmar) {
-      const { data: categorias, error: errorCategorias } = await supabase
-        .from("categorias")
-        .select("id")
-        .eq("sector_id", id)
-        .eq("comercio_id", contexto.comercio.id)
-        .eq("activo", true);
-
-      if (errorCategorias) {
-        return { error: "No se pudo validar. Probá de nuevo.", campo: "activo", valores };
-      }
-
-      const cantidad = categorias.length;
-      if (cantidad > 0) {
-        const plural = cantidad === 1 ? "" : "s";
-        return {
-          valores,
-          confirmacion:
-            `Este sector tiene ${cantidad} categoría${plural} asignada${plural}. ` +
-            `Sus productos van a quedar sin un sector visible hasta que los reasignes. ` +
-            `¿Desactivar igual?`,
-        };
-      }
     }
   }
 

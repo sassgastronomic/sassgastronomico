@@ -11,6 +11,7 @@ type CategoriaCompleta = {
   nombre: string;
   activo: boolean;
   sectorNombre: string;
+  sectorActivo: boolean;
 };
 
 type ProductoListado = {
@@ -134,7 +135,7 @@ export default async function PaginaProductos({
   const supabase = await crearClienteServidor();
   const { data: categoriasCrudo } = await supabase
     .from("categorias")
-    .select("id, nombre, activo, sectores(nombre)")
+    .select("id, nombre, activo, sectores(nombre, activo)")
     .eq("comercio_id", contexto.comercio.id)
     .order("orden", { ascending: true })
     .order("nombre", { ascending: true });
@@ -145,6 +146,7 @@ export default async function PaginaProductos({
       nombre: categoria.nombre,
       activo: categoria.activo,
       sectorNombre: categoria.sectores?.nombre ?? "—",
+      sectorActivo: categoria.sectores?.activo ?? false,
     }),
   );
 
@@ -236,6 +238,11 @@ export default async function PaginaProductos({
                 {!categoria.activo && (
                   <span className="ml-2 text-xs font-normal text-neutral-400">
                     (categoría inactiva)
+                  </span>
+                )}
+                {categoria.activo && !categoria.sectorActivo && (
+                  <span className="ml-2 text-xs font-normal text-neutral-400">
+                    (sector inactivo)
                   </span>
                 )}
               </h2>
