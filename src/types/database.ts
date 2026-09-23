@@ -364,7 +364,7 @@ export interface Database {
         ];
       };
 
-      mesas: {
+      zonas: {
         Row: {
           id: string;
           comercio_id: string;
@@ -379,12 +379,46 @@ export interface Database {
           orden?: number;
           activo?: boolean;
         };
+        Update: Partial<Database["public"]["Tables"]["zonas"]["Insert"]>;
+        Relationships: [
+          {
+            foreignKeyName: "zonas_comercio_id_fkey";
+            columns: ["comercio_id"];
+            referencedRelation: "comercios";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+
+      mesas: {
+        Row: {
+          id: string;
+          comercio_id: string;
+          nombre: string;
+          zona_id: string;
+          orden: number;
+          activo: boolean;
+        };
+        Insert: {
+          id?: string;
+          comercio_id: string;
+          nombre: string;
+          zona_id: string;
+          orden?: number;
+          activo?: boolean;
+        };
         Update: Partial<Database["public"]["Tables"]["mesas"]["Insert"]>;
         Relationships: [
           {
             foreignKeyName: "mesas_comercio_id_fkey";
             columns: ["comercio_id"];
             referencedRelation: "comercios";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "mesas_zona_id_fkey";
+            columns: ["zona_id"];
+            referencedRelation: "zonas";
             referencedColumns: ["id"];
           },
         ];
@@ -634,6 +668,13 @@ export interface Database {
       usuario_disponible: {
         Args: { p_usuario: string };
         Returns: boolean;
+      };
+      // Actualiza nombre/activo de una zona y, si `activo` cambió, arrastra
+      // el mismo valor a todas sus mesas — ver
+      // src/app/app/mesas/zonas/[id]/actions.ts y supabase/migrations/.
+      actualizar_zona_con_mesas: {
+        Args: { p_id: string; p_nombre: string; p_activo: boolean };
+        Returns: void;
       };
     };
   };
