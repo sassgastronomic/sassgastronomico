@@ -26,7 +26,7 @@ async function obtenerItemsDeSector(
   const { data: items } = await supabase
     .from("pedido_items")
     .select(
-      "id, pedido_id, nombre, cantidad, nota, estado, pedido_item_adicionales(nombre), pedidos!inner(numero, creado_en, estado, cuentas(mesas(nombre)))",
+      "id, pedido_id, nombre, categoria_nombre, cantidad, nota, estado, pedido_item_adicionales(nombre), pedidos!inner(numero, creado_en, estado, cuentas(mesas(nombre)))",
     )
     .eq("comercio_id", comercioId)
     .eq("sector_id", sectorId)
@@ -57,6 +57,7 @@ async function obtenerItemsDeSector(
     pedido.items.push({
       id: item.id,
       nombre: item.nombre,
+      categoriaNombre: item.categoria_nombre,
       cantidad: item.cantidad,
       nota: item.nota,
       estado: item.estado,

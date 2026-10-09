@@ -11,7 +11,8 @@ Si algo de lo que describe este documento cambia (una carpeta se reorganiza, un 
 3. [Las capas de seguridad](#las-capas-de-seguridad)
 4. [Patrón repetido: cómo está armado un ABM](#patrón-repetido-cómo-está-armado-un-abm)
 5. [Modelo de acceso](#modelo-de-acceso)
-6. [Guía de diagnóstico](#guía-de-diagnóstico)
+6. [Trampa conocida: Realtime se suscribe como anónimo](#trampa-conocida-realtime-se-suscribe-como-anónimo)
+7. [Guía de diagnóstico](#guía-de-diagnóstico)
 
 ---
 
@@ -68,9 +69,13 @@ src/
 │   ├── supabase/
 │   │   ├── server.ts            # Cliente para Server Components/Actions. Clave anónima,
 │   │   │                        # RLS decide qué se ve. Éste es el que se usa casi siempre.
-│   │   ├── client.ts             # Cliente para Client Components (navegador). Definido,
-│   │   │                        # pero hoy ningún componente lo importa — toda la app pasa
-│   │   │                        # por Server Actions, no hay fetch directo desde el browser.
+│   │   ├── client.ts             # Cliente para Client Components (navegador). Hoy se usa
+│   │   │                        # solo para Realtime, siempre a través de realtime.ts; el
+│   │   │                        # resto de la app lee y escribe por Server Components y
+│   │   │                        # Server Actions, no hay fetch directo desde el browser.
+│   │   ├── realtime.ts           # suscribirseConSesion(): la única forma de abrir un canal
+│   │   │                        # de Realtime. Ver "Trampa conocida: Realtime se suscribe
+│   │   │                        # como anónimo".
 │   │   └── admin.ts              # Cliente con la `service_role key` (se salta RLS). Uso
 │   │                             # exclusivo: `auth.admin.createUser` / `deleteUser` /
 │   │                             # `updateUserById`. Nunca para leer/escribir tablas.
@@ -245,6 +250,38 @@ flowchart LR
 
 ---
 
+## Trampa conocida: Realtime se suscribe como anónimo
+
+Pasó en la pantalla de cocina (`/app/sector/[id]`) y va a volver a pasar en cualquier pantalla con tiempo real (mozo, mostrador) si se abre un canal "a mano".
+
+**Síntoma:** los cambios no aparecen hasta recargar la página. El canal dice `SUBSCRIBED`, no hay ningún error en consola, y al recargar los datos están (porque la página se arma en el servidor, con la sesión del usuario).
+
+**Causa:** con el cliente de navegador de `@supabase/ssr`, `supabase.channel(...).subscribe()` manda el join al servidor sin esperar a que el cliente termine de leer la sesión de las cookies. Si el join sale antes, Realtime registra la suscripción como `anon`. RLS (`*_leer` → `es_miembro()`, que mira `auth.uid()`) no le deja ver ninguna fila a un anónimo, así que Realtime no le manda ningún evento. Cuando el token llega después, la librería solo se lo reenvía a los canales que ya terminaron de suscribirse: si el nuestro estaba a mitad del join, queda anónimo para siempre. Es una carrera de tiempos, así que no siempre falla igual — no sirve de prueba que "a mí me anduvo".
+
+**Regla:** nunca abrir un canal directo. Siempre con `suscribirseConSesion()` de [`src/lib/supabase/realtime.ts`](../src/lib/supabase/realtime.ts), que pide el token antes de armar el canal y devuelve la función de limpieza para el `useEffect` (también maneja el doble montaje de React en desarrollo):
+
+```tsx
+useEffect(() => {
+  const desuscribirse = suscribirseConSesion((supabase) =>
+    supabase
+      .channel(`algo-${id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "...", filter: "..." }, alCambiar)
+      .subscribe(),
+  );
+  return desuscribirse;
+}, [id]);
+```
+
+**Cómo confirmarlo si vuelve a pasar:** con la pantalla abierta, mirar con qué rol quedó registrada la suscripción (es una consulta de solo lectura):
+
+```bash
+npx supabase db query --linked "select entity::text, claims_role::text, claims->>'sub' as usuario from realtime.subscription;"
+```
+
+Si `claims_role` es `anon` y `usuario` está vacío, es esto. Tiene que decir `authenticated` con el id del usuario logueado.
+
+---
+
 ## Guía de diagnóstico
 
 Regla general antes de entrar al detalle: **si una consulta a Supabase no tira error pero tampoco trae lo esperado, sospechá primero de RLS**, no de un bug de lógica. Postgres/PostgREST no distinguen "no existe" de "existe pero no tenés permiso" — las dos dan 0 filas, sin aviso.
@@ -256,6 +293,7 @@ Regla general antes de entrar al detalle: **si una consulta a Supabase no tira e
 | **"No veo un producto en la carta"** | 1) `productos.activo` y, sobre todo, `categorias.activo` de su categoría — un producto activo bajo una categoría inactiva no aparece (mismo filtro que usa `carta_publica`, ver la migración). 2) `productos.sin_stock` no lo saca de la lista, solo lo grisea y bloquea el pedido — si "no lo ve" significa "no lo puede pedir", es esto. 3) Confirmar que se está mirando el comercio correcto: todo en `/app/carta` está scoped por `comercio_id`. 4) Si es el listado interno del dueño (`/app/carta/productos`): revisar el filtro de categoría activo (query param `?categoria=`) en la barra de "pastillas" — puede estar filtrando a otra categoría. | No confundir el listado interno (`/app/carta/productos`, muestra todo, activo o no) con la vista previa (`vista-previa.tsx`, simula lo que ve el cliente) — tienen criterios de visibilidad distintos a propósito. |
 | **"Un cambio en la base no se refleja"** | 1) ¿Es un cambio de **dato** (una fila) o de **esquema** (columna/función/policy)? 2) Si es un dato: cada Server Action llama a `revalidatePath(...)` después de escribir — si el cambio se hizo por fuera de una Server Action (por ejemplo, editando la fila a mano en Supabase Studio), Next no se entera hasta que algo dispare esa ruta de nuevo. Un hard refresh del navegador no alcanza: el caché es del lado del servidor (Server Component), no del browser. 3) Si es de esquema: confirmar que la migración realmente se aplicó con `npx supabase db push` — revisar que el archivo esperado esté en `supabase/migrations/` y no haya quedado sin correr. 4) Si se agregó una columna o función nueva en la base: revisar `src/types/database.ts` — es un archivo escrito a mano, nada avisa si queda desactualizado; TypeScript no se queja porque el tipo simplemente no incluye el campo nuevo. | Que el build (`next build`) haya salido bien no confirma que la migración se corrió — son dos sistemas independientes (Next no sabe nada del estado de la base). |
 | **"El menú no muestra una sección"** | 1) `menu.tsx` (`src/app/app/menu.tsx`) solo pinta lo que le pasa `construirSecciones()` en `app/layout.tsx` — revisar esa función: filtra por `rol` y por `plan` (ej. "Mesas" solo si el plan es `salon`/`completo` **y** el rol es `duenio` o `mozo`). 2) Si es una sección de sector (`/app/sector/[id]`): revisar `miembro_sectores` — un rol `sector` sin sectores asignados no tiene ningún link de sector. 3) Confirmar `miembros.rol` para esa persona en ese comercio. | Que la sección "no esté" en el menú no significa que la ruta esté rota — puede estar perfectamente accesible tipeando la URL a mano y solo faltar el link (revisar el síntoma de arriba, "me rebota", para saber si además está bloqueada). |
+| **"Una pantalla en tiempo real no se actualiza sola"** | 1) Con la pantalla abierta, revisar `realtime.subscription` (consulta en la sección "Trampa conocida: Realtime se suscribe como anónimo"): si figura `anon`, el canal se abrió sin pasar por `suscribirseConSesion()`. 2) Confirmar que la tabla esté en la publicación: `select tablename from pg_publication_tables where pubname = 'supabase_realtime';`. 3) Confirmar que la policy de lectura de esa tabla deja ver las filas al rol que mira la pantalla — Realtime aplica RLS igual que una consulta. | Que el canal diga `SUBSCRIBED` no prueba nada: también lo dice cuando está suscripto como anónimo y no va a recibir ningún evento. |
 | **"Una consulta devuelve vacío sin error"** | 1) Confirmar que el `id`/`comercio_id` que se está pidiendo es realmente el de la sesión actual (`contexto.comercio.id`), no uno copiado de otro lado. 2) Revisar qué policy aplica a esa tabla (`<tabla>_leer`, `<tabla>_duenio`, `<tabla>_admin` en `supabase/migrations/20260920144125_remote_schema.sql`) y si `tiene_rol()`/`es_miembro()`/`es_admin()` daría `true` para esa sesión concreta. 3) Revisar `miembros.activo`: `tiene_rol()` exige `m.activo = true` — una membresía desactivada pierde acceso a **todo** vía RLS aunque las filas sigan existiendo. 4) Revisar si el código usó `.single()` en vez de `.maybeSingle()` — `.single()` sí tira error si no hay filas, así que "vacío sin error" a veces es señal de que se usó `.maybeSingle()` justo donde no correspondía (esconde un caso que debería haber sido un error visible). | No asumir que es un bug de la query antes de mirar RLS — es, con diferencia, la causa más común de este síntoma en este proyecto. |
 
 ---
@@ -265,7 +303,7 @@ Regla general antes de entrar al detalle: **si una consulta a Supabase no tira e
 Repaso hecho con el equipo (2026-09-20): de los puntos que siguen, el cliente de navegador sin usar y las pantallas públicas/de sector son simplemente trabajo que todavía no llegó (no hace falta "arreglarlos"), y el ABM de comercios se deja con su estructura propia a propósito — ya está auditado dos veces y uniformarlo solo por consistencia es tocar código que funciona sin necesidad.
 
 - No hay suite de tests en el proyecto todavía. Verificar cambios corriendo `npx tsc --noEmit`, `npx eslint src --max-warnings=0` y `npx next build`, y probando a mano en el browser.
-- `src/lib/supabase/client.ts` (cliente de navegador) ya está en uso: `/app/sector/[id]/pantalla-sector.tsx` lo usa para suscribirse a `pedido_items` por Realtime (primer y único consumidor hasta ahora).
+- `src/lib/supabase/client.ts` (cliente de navegador) ya está en uso, solo para Realtime y siempre a través de `src/lib/supabase/realtime.ts`. El único consumidor hasta ahora es `/app/sector/[id]/pantalla-sector.tsx`, suscripto a `pedido_items`.
 - `src/app/layout.tsx` (shell HTML, fuentes) sigue siendo el de `create-next-app` (`lang="en"`, título "Create Next App"). `src/app/page.tsx` ya no lo es: redirige según quién sos.
 - No existe todavía una ruta pública de landing (`/{slug}`) ni de QR de mesa, aunque el modelo de datos y las funciones de base (`carta_publica`, `crear_pedido_landing`) ya están pensadas para eso. Del lado interno ya se puede abrir una cuenta y cargar rondas (`/app/salon`), y la cocina ve y avanza los ítems en tiempo real (`/app/sector/[id]`), pero todavía no se puede marcar un ítem como entregado ni cerrar una cuenta: las mesas abiertas quedan ocupadas y los ítems listos se acumulan en la pantalla de sector. Tampoco existen todavía la landing ni el QR de mesa.
 - `src/app/admin/comercios/nuevo/page.tsx` se deja con su estructura propia (sin `formulario.tsx` separado) a propósito, no por descuido — ver "Convención de nombres" más arriba.

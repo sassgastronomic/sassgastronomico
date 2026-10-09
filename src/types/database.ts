@@ -546,6 +546,8 @@ export interface Database {
           pedido_id: string;
           producto_id: string | null;
           nombre: string;
+          // Copia, como `nombre`. Null en ítems viejos sin producto.
+          categoria_nombre: string | null;
           precio_unitario: number;
           cantidad: number;
           nota: string | null;
@@ -560,6 +562,7 @@ export interface Database {
           pedido_id: string;
           producto_id?: string | null;
           nombre: string;
+          categoria_nombre?: string | null;
           precio_unitario: number;
           cantidad: number;
           nota?: string | null;

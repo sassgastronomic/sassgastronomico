@@ -10,6 +10,7 @@ export type AdicionalPicker = { id: string; nombre: string; precioExtra: number 
 export type ProductoPicker = {
   id: string;
   nombre: string;
+  categoriaNombre: string;
   descripcion: string | null;
   precio: number;
   adicionales: AdicionalPicker[];
@@ -21,10 +22,14 @@ export type CategoriaPicker = {
   productos: ProductoPicker[];
 };
 
+// `categoriaNombre` es solo para mostrar: al confirmar, la categoría que
+// queda guardada en el pedido la copia la base (crear_pedido_mozo), no se
+// toma de acá.
 type ItemCarrito = {
   clave: string;
   productoId: string;
   nombre: string;
+  categoriaNombre: string;
   precioUnitario: number;
   cantidad: number;
   nota: string;
@@ -81,11 +86,9 @@ function FilaProducto({
 // Lomitos vs. en Hamburguesas) serían indistinguibles si no.
 function FilaResultadoBusqueda({
   producto,
-  categoriaNombre,
   onSeleccionar,
 }: {
   producto: ProductoPicker;
-  categoriaNombre: string;
   onSeleccionar: (producto: ProductoPicker) => void;
 }) {
   return (
@@ -99,7 +102,7 @@ function FilaResultadoBusqueda({
           {producto.nombre}
         </span>
         <span className="block text-sm text-neutral-500">
-          {categoriaNombre}
+          {producto.categoriaNombre}
         </span>
       </span>
       <span className="shrink-0 text-base font-semibold text-neutral-600">
@@ -175,15 +178,13 @@ export function CargaPedido({
         productos: categoria.productos,
       }));
 
-    const sueltos = categorias.flatMap((categoria) =>
-      categoria.productos
-        .filter(
-          (producto) =>
-            !idsEnGrupos.has(producto.id) &&
-            normalizarBusqueda(producto.nombre).includes(termino),
-        )
-        .map((producto) => ({ producto, categoriaNombre: categoria.nombre })),
-    );
+    const sueltos = categorias
+      .flatMap((categoria) => categoria.productos)
+      .filter(
+        (producto) =>
+          !idsEnGrupos.has(producto.id) &&
+          normalizarBusqueda(producto.nombre).includes(termino),
+      );
 
     return { grupos, sueltos };
   }, [categorias, busqueda, buscando]);
@@ -230,6 +231,7 @@ export function CargaPedido({
         clave: crypto.randomUUID(),
         productoId: productoEnEdicion.id,
         nombre: productoEnEdicion.nombre,
+        categoriaNombre: productoEnEdicion.categoriaNombre,
         precioUnitario: productoEnEdicion.precio,
         cantidad: cantidadEdicion,
         nota: notaEdicion.trim(),
@@ -317,7 +319,6 @@ export function CargaPedido({
                       <FilaResultadoBusqueda
                         key={producto.id}
                         producto={producto}
-                        categoriaNombre={grupo.categoriaNombre}
                         onSeleccionar={abrirEdicion}
                       />
                     ))}
@@ -327,11 +328,10 @@ export function CargaPedido({
 
               {resultados.sueltos.length > 0 && (
                 <div className="divide-y divide-neutral-100 overflow-hidden rounded-2xl border border-neutral-200 bg-white">
-                  {resultados.sueltos.map(({ producto, categoriaNombre }) => (
+                  {resultados.sueltos.map((producto) => (
                     <FilaResultadoBusqueda
                       key={producto.id}
                       producto={producto}
-                      categoriaNombre={categoriaNombre}
                       onSeleccionar={abrirEdicion}
                     />
                   ))}
@@ -355,8 +355,13 @@ export function CargaPedido({
                     onClick={() => abrirEdicion(producto)}
                     className="flex w-40 shrink-0 flex-col justify-between rounded-2xl border-2 border-neutral-200 bg-white p-3 text-left active:bg-neutral-50"
                   >
-                    <span className="line-clamp-2 text-sm font-bold text-neutral-900">
-                      {producto.nombre}
+                    <span>
+                      <span className="line-clamp-2 text-sm font-bold text-neutral-900">
+                        {producto.nombre}
+                      </span>
+                      <span className="block truncate text-xs text-neutral-500">
+                        {producto.categoriaNombre}
+                      </span>
                     </span>
                     <span className="mt-2 text-sm font-semibold text-neutral-600">
                       {formateadorPrecio.format(producto.precio)}
@@ -437,6 +442,9 @@ export function CargaPedido({
             <div>
               <p className="text-2xl font-bold text-neutral-900">
                 {productoEnEdicion.nombre}
+              </p>
+              <p className="text-base text-neutral-500">
+                {productoEnEdicion.categoriaNombre}
               </p>
               {productoEnEdicion.descripcion && (
                 <p className="mt-1 text-base text-neutral-500">
@@ -569,9 +577,14 @@ export function CargaPedido({
                   className="rounded-2xl border-2 border-neutral-200 p-4"
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <p className="text-lg font-bold text-neutral-900">
-                      {item.nombre}
-                    </p>
+                    <div className="min-w-0">
+                      <p className="text-lg font-bold text-neutral-900">
+                        {item.nombre}
+                      </p>
+                      <p className="text-sm text-neutral-500">
+                        {item.categoriaNombre}
+                      </p>
+                    </div>
                     <p className="shrink-0 text-lg font-semibold text-neutral-900">
                       {formateadorPrecio.format(totalItem(item))}
                     </p>

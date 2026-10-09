@@ -32,6 +32,7 @@ const MINIMO_ACCESOS_RAPIDOS = 3;
 type RondaItem = {
   id: string;
   nombre: string;
+  categoriaNombre: string | null;
   precioUnitario: number;
   cantidad: number;
   nota: string | null;
@@ -70,6 +71,7 @@ async function obtenerCategoriasParaPedir(
         .map((producto) => ({
           id: producto.id,
           nombre: producto.nombre,
+          categoriaNombre: categoria.nombre,
           descripcion: producto.descripcion,
           precio: producto.precio,
           adicionales: producto.adicionales.map((adicional) => ({
@@ -164,7 +166,9 @@ async function obtenerRondas(
 
   const { data: items } = await supabase
     .from("pedido_items")
-    .select("id, pedido_id, nombre, precio_unitario, cantidad, nota")
+    .select(
+      "id, pedido_id, nombre, categoria_nombre, precio_unitario, cantidad, nota",
+    )
     .eq("comercio_id", comercioId)
     .in("pedido_id", pedidoIds)
     .order("nombre", { ascending: true });
@@ -196,6 +200,7 @@ async function obtenerRondas(
     lista.push({
       id: item.id,
       nombre: item.nombre,
+      categoriaNombre: item.categoria_nombre,
       precioUnitario: item.precio_unitario,
       cantidad: item.cantidad,
       nota: item.nota,
@@ -320,26 +325,33 @@ export default async function PaginaSalonMesa({
               <div className="mt-2 space-y-1.5">
                 {ronda.items.map((item) => (
                   <div key={item.id} className="text-sm text-neutral-700">
-                    <span className="font-semibold text-neutral-900">
-                      {item.cantidad}×
-                    </span>{" "}
-                    {item.nombre}
-                    {item.adicionales.length > 0 && (
-                      <span className="text-neutral-500">
+                    <p>
+                      <span className="font-semibold text-neutral-900">
+                        {item.cantidad}×
+                      </span>{" "}
+                      {item.nombre}
+                      {item.adicionales.length > 0 && (
+                        <span className="text-neutral-500">
+                          {" "}
+                          ({item.adicionales.map((a) => a.nombre).join(", ")})
+                        </span>
+                      )}
+                      {item.nota && (
+                        <span className="text-neutral-500 italic">
+                          {" "}
+                          — &quot;{item.nota}&quot;
+                        </span>
+                      )}
+                      <span className="text-neutral-400">
                         {" "}
-                        ({item.adicionales.map((a) => a.nombre).join(", ")})
+                        · {formateadorPrecio.format(item.precioUnitario)}
                       </span>
+                    </p>
+                    {item.categoriaNombre && (
+                      <p className="text-xs text-neutral-400">
+                        {item.categoriaNombre}
+                      </p>
                     )}
-                    {item.nota && (
-                      <span className="text-neutral-500 italic">
-                        {" "}
-                        — &quot;{item.nota}&quot;
-                      </span>
-                    )}
-                    <span className="text-neutral-400">
-                      {" "}
-                      · {formateadorPrecio.format(item.precioUnitario)}
-                    </span>
                   </div>
                 ))}
               </div>

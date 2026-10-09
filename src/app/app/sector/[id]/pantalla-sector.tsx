@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { formatearTiempoAbierta } from "@/lib/salon/tiempo";
 import { estaDemorado } from "@/lib/sector/tiempo";
-import { crearClienteNavegador } from "@/lib/supabase/client";
+import { suscribirseConSesion } from "@/lib/supabase/realtime";
 import type { EstadoItem } from "@/types/database";
 
 import { avanzarItem, avanzarPedido, retrocederItem } from "./actions";
@@ -13,6 +13,7 @@ import { avanzarItem, avanzarPedido, retrocederItem } from "./actions";
 export type ItemPedido = {
   id: string;
   nombre: string;
+  categoriaNombre: string | null;
   cantidad: number;
   nota: string | null;
   estado: EstadoItem;
@@ -141,7 +142,6 @@ export function PantallaSector({
   }, [wakeLockActivo, wakeLockSoportado]);
 
   useEffect(() => {
-    const supabase = crearClienteNavegador();
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let huboInsert = false;
 
@@ -166,28 +166,30 @@ export function PantallaSector({
     // cancele pedidos va a cambiar `pedidos.estado` sin tocar sus ítems, y
     // esta pantalla (que filtra por pedido confirmado) no se va a enterar:
     // ahí hay que sumar una suscripción a `pedidos`.
-    const canal = supabase
-      .channel(`sector-${sectorId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "pedido_items",
-          filter: `sector_id=eq.${sectorId}`,
-        },
-        (payload) => programarRefresco(payload.eventType === "INSERT"),
-      )
-      .subscribe((estado) => {
-        setConectado(estado === "SUBSCRIBED");
-        if (estado === "SUBSCRIBED") {
-          router.refresh();
-        }
-      });
+    const desuscribirse = suscribirseConSesion((supabase) =>
+      supabase
+        .channel(`sector-${sectorId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "pedido_items",
+            filter: `sector_id=eq.${sectorId}`,
+          },
+          (payload) => programarRefresco(payload.eventType === "INSERT"),
+        )
+        .subscribe((estado) => {
+          setConectado(estado === "SUBSCRIBED");
+          if (estado === "SUBSCRIBED") {
+            router.refresh();
+          }
+        }),
+    );
 
     return () => {
       if (timeoutId) clearTimeout(timeoutId);
-      void supabase.removeChannel(canal);
+      desuscribirse();
     };
   }, [sectorId, router]);
 
@@ -317,9 +319,16 @@ export function PantallaSector({
                       className="rounded-xl border border-neutral-200 p-3"
                     >
                       <div className="flex items-start justify-between gap-3">
-                        <p className="text-xl font-bold text-neutral-900">
-                          {item.cantidad}× {item.nombre}
-                        </p>
+                        <div className="min-w-0">
+                          <p className="text-xl font-bold text-neutral-900">
+                            {item.cantidad}× {item.nombre}
+                          </p>
+                          {item.categoriaNombre && (
+                            <p className="text-lg font-semibold text-neutral-500">
+                              {item.categoriaNombre}
+                            </p>
+                          )}
+                        </div>
                         <span
                           className={`shrink-0 rounded-full px-3 py-1 text-sm font-bold ${
                             item.estado === "listo"
