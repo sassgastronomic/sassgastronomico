@@ -1,5 +1,6 @@
 import { cerrarSesion } from "@/lib/auth/actions";
 import { obtenerContextoComercio } from "@/lib/comercio/contexto";
+import { planPermiteTakeAway } from "@/lib/comercios/validacion";
 import { crearClienteServidor } from "@/lib/supabase/server";
 import type { PlanComercio, RolMiembro } from "@/types/database";
 
@@ -36,8 +37,14 @@ function construirSecciones({
     secciones.push({ href: "/app/carta", etiqueta: "Carta" });
   }
 
-  if (rol === "duenio" || rol === "mostrador") {
-    secciones.push({ href: "/app/pedidos", etiqueta: "Pedidos" });
+  // Los pedidos online (mostrador): solo con un plan que tenga take away.
+  // En plan salón no hay landing, y el mostrador ahí todavía no tiene
+  // pantalla propia.
+  if (
+    planPermiteTakeAway(plan) &&
+    (rol === "duenio" || rol === "mostrador")
+  ) {
+    secciones.push({ href: "/app/pedidos", etiqueta: "Pedidos online" });
   }
 
   // Dos pantallas de mesas, para dos tareas distintas: "Atender mesas" es

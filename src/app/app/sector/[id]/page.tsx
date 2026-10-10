@@ -11,7 +11,10 @@ import { PantallaSector, type PedidoConItems } from "./pantalla-sector";
  * solo de pedidos `confirmado` (docs/SCHEMA.md, "Estados"): un pedido de la
  * landing sin aceptar o uno cancelado no tiene que llegar a la cocina.
  * Agrupados por pedido y ordenados por antigüedad del pedido (el más
- * viejo primero: lo que entró antes se prepara antes). Una sola consulta,
+ * viejo primero: lo que entró antes se prepara antes). La antigüedad de un
+ * pedido online cuenta desde que el mostrador lo aceptó (`confirmado_en`),
+ * no desde que el cliente lo hizo: hasta aceptarlo, la cocina ni lo veía,
+ * y contarle ese rato lo marcaría demorado de entrada. Una sola consulta,
  * con `pedidos`/`cuentas`/`mesas` y `pedido_item_adicionales` embebidos —
  * nada de una consulta por ítem ni por pedido.
  */
@@ -26,7 +29,7 @@ async function obtenerItemsDeSector(
   const { data: items } = await supabase
     .from("pedido_items")
     .select(
-      "id, pedido_id, nombre, categoria_nombre, cantidad, nota, estado, pedido_item_adicionales(nombre), pedidos!inner(numero, creado_en, estado, cuentas(mesas(nombre)))",
+      "id, pedido_id, nombre, categoria_nombre, cantidad, nota, estado, pedido_item_adicionales(nombre), pedidos!inner(numero, origen, creado_en, confirmado_en, estado, cliente_nombre, modalidad, nota, cuentas(mesas(nombre)))",
     )
     .eq("comercio_id", comercioId)
     .eq("sector_id", sectorId)
@@ -45,11 +48,22 @@ async function obtenerItemsDeSector(
 
     let pedido = pedidosPorId.get(item.pedido_id);
     if (!pedido) {
+      const esOnline = item.pedidos.origen === "landing";
       pedido = {
         id: item.pedido_id,
         numero: item.pedidos.numero,
-        creadoEn: item.pedidos.creado_en,
+        inicio:
+          esOnline && item.pedidos.confirmado_en
+            ? item.pedidos.confirmado_en
+            : item.pedidos.creado_en,
         mesaNombre: item.pedidos.cuentas?.mesas?.nombre ?? null,
+        online: esOnline
+          ? {
+              cliente: item.pedidos.cliente_nombre ?? "",
+              modalidad: item.pedidos.modalidad,
+              nota: item.pedidos.nota,
+            }
+          : null,
         items: [],
       };
       pedidosPorId.set(item.pedido_id, pedido);
@@ -66,7 +80,7 @@ async function obtenerItemsDeSector(
   }
 
   return [...pedidosPorId.values()].sort(
-    (a, b) => new Date(a.creadoEn).getTime() - new Date(b.creadoEn).getTime(),
+    (a, b) => new Date(a.inicio).getTime() - new Date(b.inicio).getTime(),
   );
 }
 
@@ -138,7 +152,11 @@ export default async function PaginaSector({
         </p>
       )}
 
-      <PantallaSector sectorId={sector.id} pedidos={pedidos} />
+      <PantallaSector
+        comercioId={contexto.comercio.id}
+        sectorId={sector.id}
+        pedidos={pedidos}
+      />
     </div>
   );
 }

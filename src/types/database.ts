@@ -6,8 +6,8 @@
  * la clave `Views` (vacía: no se usan todavía) siguen la convención de
  * `supabase gen types typescript`, que es lo que espera el genérico
  * `Database` de `@supabase/supabase-js`. `Functions` solo tiene tipadas
- * las que se llaman desde la app — agregar las demás (`crear_pedido_landing`
- * todavía no tiene consumidor en el código) cuando haga falta usarlas.
+ * las que se llaman desde la app — agregar las demás cuando haga falta
+ * usarlas.
  *
  * Mantener este archivo a mano con el esquema: si se agrega una tabla,
  * columna o función en `supabase/migrations/`, reflejarla acá.
@@ -51,7 +51,9 @@ export type EstadoItem = "pendiente" | "en_preparacion" | "listo" | "entregado";
  * consultas propias (ver src/app/app/carta/page.tsx).
  */
 export type CartaPublicaResultado = {
-  comercio: { id: string; nombre: string; plan: PlanComercio };
+  // Sin el id del comercio a propósito: la función es pública y la carta no
+  // lo necesita.
+  comercio: { nombre: string; plan: PlanComercio; whatsapp: string | null };
   categorias: {
     id: string;
     nombre: string;
@@ -77,6 +79,38 @@ export type ItemPedidoMozo = {
   adicionales: string[];
 };
 
+// La landing manda los ítems con la misma forma.
+export type ItemPedidoLanding = ItemPedidoMozo;
+
+// Un ítem tal como quedó guardado en un pedido: las copias de nombre,
+// categoría y precio (regla de oro #3), no lo que mandó el navegador.
+export type ItemPedidoGuardado = {
+  nombre: string;
+  categoria_nombre: string | null;
+  precio_unitario: number;
+  cantidad: number;
+  nota: string | null;
+  adicionales: { nombre: string; precio_extra: number }[];
+};
+
+/**
+ * Lo que devuelve `seguimiento_pedido(p_slug, p_codigo)`: lo justo para
+ * que el cliente vea cómo va su pedido de la landing (sin su teléfono ni
+ * ids internos). `null` si el código no existe, es de otro comercio, el
+ * comercio está suspendido o el pedido tiene más de 24 horas.
+ */
+export type SeguimientoPedidoResultado = {
+  comercio: { nombre: string; whatsapp: string | null; zona_horaria: string };
+  numero: number;
+  estado: EstadoPedido;
+  modalidad: ModalidadPedido;
+  cliente_nombre: string;
+  direccion: string | null;
+  nota: string | null;
+  creado_en: string;
+  items: (ItemPedidoGuardado & { estado: EstadoItem })[];
+};
+
 // ---------------------------------------------------------------------
 // Tablas
 // ---------------------------------------------------------------------
@@ -94,6 +128,9 @@ export interface Database {
           limite_usuarios: number;
           zona_horaria: string;
           hora_corte: string;
+          // Solo dígitos, con código de país y sin "+" (lo que pide wa.me).
+          // Null: la landing no ofrece avisar por WhatsApp.
+          whatsapp: string | null;
           creado_en: string;
         };
         Insert: {
@@ -105,6 +142,7 @@ export interface Database {
           limite_usuarios?: number;
           zona_horaria?: string;
           hora_corte?: string;
+          whatsapp?: string | null;
           creado_en?: string;
         };
         Update: Partial<Database["public"]["Tables"]["comercios"]["Insert"]>;
@@ -496,6 +534,9 @@ export interface Database {
           confirmado_en: string | null;
           cancelado_en: string | null;
           motivo_cancelacion: string | null;
+          // Solo pedidos de la landing: lo genera crear_pedido_landing y es
+          // lo que va en el link de seguimiento del cliente.
+          codigo_seguimiento: string | null;
         };
         Insert: {
           id?: string;
@@ -515,6 +556,7 @@ export interface Database {
           confirmado_en?: string | null;
           cancelado_en?: string | null;
           motivo_cancelacion?: string | null;
+          codigo_seguimiento?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["pedidos"]["Insert"]>;
         Relationships: [
@@ -697,6 +739,58 @@ export interface Database {
       crear_pedido_mozo: {
         Args: { p_cuenta_id: string; p_items: ItemPedidoMozo[] };
         Returns: { pedido_id: string; numero: number };
+      };
+      // Pedido de la landing pública (anónimo): valida comercio (activo,
+      // con take away y con WhatsApp cargado), datos del cliente y
+      // disponibilidad; los precios salen de la base. Nace
+      // `pendiente_confirmar`. Devuelve el código de seguimiento (se genera
+      // en el mismo insert del pedido) y el detalle guardado para armar el
+      // mensaje de WhatsApp — ver src/app/[slug]/actions.ts. También
+      // `vence_en` (el tope del link, ver plazos_seguimiento en
+      // supabase/migrations/), que hoy la app no usa.
+      crear_pedido_landing: {
+        Args: {
+          p_slug: string;
+          p_cliente_nombre: string;
+          // Opcional: la landing ya no lo pide (el contacto es el chat de
+          // WhatsApp). La columna queda por los pedidos viejos.
+          p_cliente_telefono: string | null;
+          p_modalidad: ModalidadPedido;
+          p_direccion: string | null;
+          p_nota: string | null;
+          p_items: ItemPedidoLanding[];
+        };
+        Returns: {
+          numero: number;
+          codigo_seguimiento: string;
+          vence_en: string;
+          items: ItemPedidoGuardado[];
+        };
+      };
+      seguimiento_pedido: {
+        Args: { p_slug: string; p_codigo: string };
+        Returns: SeguimientoPedidoResultado | null;
+      };
+      // Mostrador (src/app/app/pedidos/): una función por acción sobre un
+      // pedido de la landing. Validan adentro rol (dueño o mostrador),
+      // estado y origen, y bloquean el pedido mientras trabajan — ver
+      // supabase/migrations/.
+      aceptar_pedido_landing: {
+        Args: { p_pedido_id: string };
+        Returns: void;
+      };
+      cancelar_pedido_landing: {
+        Args: { p_pedido_id: string };
+        Returns: void;
+      };
+      // Cantidad 0 = sacar el ítem. Solo con el pedido todavía pendiente.
+      cambiar_item_pedido_landing: {
+        Args: { p_item_id: string; p_cantidad: number };
+        Returns: void;
+      };
+      entregar_pedido_landing: {
+        Args: { p_pedido_id: string };
+        Returns: void;
       };
       // Cierra la cuenta solo si no queda nada sin entregar; si queda,
       // devuelve `ok: false` con cuántos ítems hay en cada estado (y no

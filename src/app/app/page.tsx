@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { obtenerContextoComercio } from "@/lib/comercio/contexto";
+import { planPermiteTakeAway } from "@/lib/comercios/validacion";
 import { planPermiteSalon } from "@/lib/mesas/validacion";
 import type { PlanComercio } from "@/types/database";
 
@@ -23,14 +24,18 @@ export default async function PaginaApp() {
 
   const { comercio, rol, usuario, sectoresAsignados } = contexto;
 
-  // El login manda a todos acá. El mozo y la cocina tienen una sola
-  // pantalla de trabajo: entran directo a ella en vez de a este inicio
-  // vacío. Cuidado con los bucles: /app/salon y /app/sector/[id] rebotan a
-  // /app cuando no corresponde, así que solo se redirige con las mismas
-  // condiciones que esas páginas aceptan (plan con salón para el mozo; un
-  // sector que el miembro tiene asignado).
+  // El login manda a todos acá. El mozo, el mostrador y la cocina tienen
+  // una sola pantalla de trabajo: entran directo a ella en vez de a este
+  // inicio vacío. Cuidado con los bucles: /app/salon y /app/sector/[id]
+  // rebotan a /app cuando no corresponde, así que solo se redirige con las
+  // mismas condiciones que esas páginas aceptan (plan con salón para el
+  // mozo; plan con take away para el mostrador; un sector que el miembro
+  // tiene asignado).
   if (rol === "mozo" && planPermiteSalon(comercio.plan)) {
     redirect("/app/salon");
+  }
+  if (rol === "mostrador" && planPermiteTakeAway(comercio.plan)) {
+    redirect("/app/pedidos");
   }
   if (rol === "sector" && sectoresAsignados.length === 1) {
     redirect(`/app/sector/${sectoresAsignados[0].id}`);

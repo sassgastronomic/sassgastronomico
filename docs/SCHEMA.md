@@ -42,7 +42,8 @@ revoke execute on function nombre_funcion(tipos, de, los, argumentos) from publi
 grant execute on function nombre_funcion(tipos, de, los, argumentos) to authenticated;
 -- + `, anon` en el grant de arriba únicamente si la función es parte de la
 -- API pública (piensa: se llama desde una pantalla sin sesión, como la
--- landing o el QR de mesa — hoy son `carta_publica` y `crear_pedido_landing`).
+-- landing o el QR de mesa — hoy son `carta_publica`, `crear_pedido_landing`
+-- y `seguimiento_pedido`).
 ```
 
 - Casi ninguna función necesita `anon`: la mayoría solo las llama la app ya logueada (rol `authenticated`), o las invoca otra función/trigger/policy dentro de una transacción de un usuario logueado.
@@ -50,6 +51,7 @@ grant execute on function nombre_funcion(tipos, de, los, argumentos) to authenti
 - El `revoke` explícito de `anon` (además de `public`) es redundante en los hechos — revocar de `PUBLIC` ya le saca el acceso heredado — pero se deja igual de explícito, a propósito, para que quede a la vista sin tener que razonar la cadena de herencia cada vez.
 - Un `EXECUTE` otorgado a `authenticated` no es "solo para dueños": lo tiene *cualquier* sesión logueada de *cualquier* comercio, cualquier rol. Si la función responde algo que no debería ver cualquier miembro de cualquier comercio (ver `usuario_disponible` más abajo, que consulta a través de todos los comercios), el candado real tiene que ir *adentro* de la función (un chequeo con `raise exception` si no corresponde), no en el grant.
 - Esta regla se sumó en el sprint 3 y ya se aplicó retroactivamente a todas las funciones existentes a esa fecha (helpers de permisos, triggers, `carta_publica`, `crear_pedido_landing`, etc.), no solo a las nuevas del sprint. Cualquier función que se agregue de acá en adelante también tiene que llevarla.
+- **Ojo con `authenticated`**: Supabase le da `EXECUTE` *directo* (no a través de `PUBLIC`) a toda función nueva del esquema `public`. Una función de uso interno — que solo llaman otras funciones `security definer`, como `plazos_seguimiento` o `motivo_estado_pedido` — tiene que revocárselo explícito: `revoke execute on function … from public, anon, authenticated;`.
 - Los triggers (`crear_perfil_nuevo_usuario`, `asignar_numero_pedido`, `validar_limite_usuarios`, etc.) llevan el `revoke` pero **sin** `grant` a ningún rol: nadie los invoca directo, el motor los dispara solo al ocurrir el evento (`insert`/`update` de la tabla), y eso no requiere `EXECUTE` de quien dispara el evento — revocar `PUBLIC` no rompe el trigger.
 
 ## Planes
@@ -133,7 +135,7 @@ erDiagram
 
 ### Base (sprint 1)
 
-**`comercios`**: `id`, `nombre`, `slug` (único, para URLs: `/garage-grill`), `plan`, `estado` (`activo` | `suspendido`), `limite_usuarios` (10), `zona_horaria` (`America/Argentina/Buenos_Aires`), `hora_corte` (06:00), `creado_en`.
+**`comercios`**: `id`, `nombre`, `slug` (único, para URLs: `/garage-grill`; `admin`, `app`, `login` y `api` están reservados porque son rutas de la app), `plan`, `estado` (`activo` | `suspendido`), `limite_usuarios` (10), `zona_horaria` (`America/Argentina/Buenos_Aires`), `hora_corte` (06:00), `whatsapp` (solo dígitos, con código de país y sin "+", como lo pide wa.me — ej. `5491122334455`; lo carga el admin en `/admin/comercios/[id]`. Sin número, la landing no toma pedidos: es el único contacto con el cliente, ver "Landing pública"), `creado_en`.
 
 **`perfiles`**: `id` (= `auth.users.id`), `nombre`, `email`, `usuario` (nombre de usuario del personal sin email real, único en todo el sistema, ver "Identificación del personal"), `es_admin`, `creado_en`.
 
@@ -180,7 +182,7 @@ Por qué no hay cascada física acá (a diferencia de zonas → mesas): son tres
 
 **`cuentas`** (mesa abierta): `id`, `comercio_id`, `mesa_id`, `mozo_id` (→ `perfiles`), `estado` (`abierta` | `cerrada`), `abierta_en`, `cerrada_en`. Solo una cuenta abierta por mesa. Se cierra con la función `cerrar_cuenta`, que solo cierra si no queda ningún ítem sin entregar (lo de pedidos cancelados no cuenta) y, si queda, devuelve cuántos hay en cada estado sin cerrar. Bloquea la fila de la cuenta mientras tanto, y `crear_pedido_mozo` toma el mismo bloqueo: una ronda cargada en el mismo instante en que se cierra la mesa nunca queda adentro de una cuenta cerrada. Cerrar no se deshace.
 
-**`pedidos`** (un pedido take away o una ronda de mesa): `id`, `comercio_id`, `jornada` (date), `numero` (visible, reinicia por jornada), `origen` (`landing` | `mozo` | `qr_mesa` | `mostrador`), `cuenta_id` (null en take away), `estado`, `cliente_nombre`, `cliente_telefono`, `modalidad` (`retiro` | `envio`), `direccion`, `nota`, `creado_por`, `creado_en`, `confirmado_en`, `cancelado_en`, `motivo_cancelacion`.
+**`pedidos`** (un pedido take away o una ronda de mesa): `id`, `comercio_id`, `jornada` (date), `numero` (visible, reinicia por jornada), `origen` (`landing` | `mozo` | `qr_mesa` | `mostrador`), `cuenta_id` (null en take away), `estado`, `cliente_nombre`, `cliente_telefono` (opcional: la landing ya no lo pide, el contacto es el chat de WhatsApp; queda por los pedidos viejos), `modalidad` (`retiro` | `envio`), `direccion`, `nota`, `creado_por`, `creado_en`, `confirmado_en`, `cancelado_en`, `motivo_cancelacion`, `codigo_seguimiento` (solo pedidos de la landing: uuid al azar, único, que va en el link de seguimiento; el cliente lo recibe al confirmar y el mostrador lo tiene para reenviarlo — ver "Landing pública"). En los pedidos de la landing, `confirmado_en` es cuándo lo aceptó el mostrador, y desde ahí cuenta el reloj de cocina.
 
 **`pedido_items`**: `id`, `comercio_id`, `pedido_id`, `producto_id`, `nombre` (copia), `categoria_nombre` (copia: muchos productos se llaman solo por su variante, "Simple", y sin la categoría la cocina no sabe si es un lomito o una hamburguesa), `precio_unitario` (copia), `cantidad`, `nota` ("bien cocida"), `sector_id` (copia: a qué pantalla va), `estado`, `listo_en`, `entregado_en`.
 
@@ -197,7 +199,7 @@ stateDiagram-v2
   pendiente_confirmar --> confirmado: mostrador acepta
   pendiente_confirmar --> cancelado: mostrador rechaza
   confirmado --> entregado: todos los ítems entregados
-  confirmado --> cancelado: mostrador cancela
+  confirmado --> cancelado: mostrador cancela (landing)
   entregado --> [*]
   cancelado --> [*]
 ```
@@ -223,10 +225,15 @@ stateDiagram-v2
 
 ### Landing pública (plan `take_away` o `completo`)
 
-- URL: `/{slug}`. Muestra la carta activa. Pide nombre, teléfono, modalidad y dirección si es envío.
+- URL: `/{slug}`. Muestra la carta activa. Pide nombre, modalidad y dirección si es envío. **No pide teléfono**: el contacto con el cliente es WhatsApp, como trabajan hoy estos locales.
 - No tiene opción de mesa.
-- El cliente **no** escribe en tablas directamente: usa la función `crear_pedido_landing` (security definer), que valida plan, estado del comercio, stock y precios desde la base (nunca confía en precios del cliente).
-- El pedido nace `pendiente_confirmar`.
+- Flujo: el cliente arma el pedido → carga nombre, retiro o envío (y dirección si es envío) → revisa el resumen con el total en una confirmación → al aceptar, se crea el pedido y se le abre WhatsApp con el chat del local y el pedido ya escrito (empieza con el número de pedido en negrita, para que el mostrador lo cruce con su pantalla, y termina con el link de seguimiento, así le queda en su propio chat) → al volver al navegador ve su link de seguimiento, con el aviso de que lo guarde y de que, si lo pierde, se lo pida al local por WhatsApp. El mensaje se arma recién después de crear el pedido: el código ya existe (lo genera el mismo insert), y si no llegara no se arma ningún mensaje.
+- **Sin WhatsApp cargado (`comercios.whatsapp`), el local no toma pedidos online**: no habría cómo contactar al cliente. La landing lo muestra como "no toma pedidos online" y `crear_pedido_landing` lo rechaza.
+- El cliente **no** escribe en tablas directamente: usa la función `crear_pedido_landing` (security definer), que valida plan, estado del comercio, WhatsApp, disponibilidad y precios desde la base (nunca confía en precios del cliente), y también los datos del cliente con los mismos límites que la pantalla (nombre, dirección obligatoria con envío, hasta 50 líneas y 99 unidades por línea; el teléfono es opcional y, si llega, se valida): la función se puede llamar directo con la clave anónima, que es pública. Devuelve el número, el código de seguimiento, hasta cuándo puede servir el link como máximo (`vence_en`) y el detalle guardado (para armar el mensaje).
+- El pedido nace `pendiente_confirmar`. Con retiro no se guarda dirección aunque llegue.
+- El sistema no cobra el envío ni lo suma al total: la pantalla avisa que su costo se arregla aparte con el local. Tampoco se paga online. Los totales que ve el cliente dicen "Documento no válido como factura" (ver "Mozo").
+- **Seguimiento** en `/{slug}/pedido/{codigo_seguimiento}`, sin cuenta ni login. El cliente recibe el link al confirmar; el mostrador lo tiene en su pantalla para reenviárselo. La función `seguimiento_pedido(slug, código)` devuelve el estado y el detalle (sin el teléfono del cliente ni ids internos) solo si el código existe, es de un pedido de la landing de ese mismo comercio, el comercio está activo y el link no venció. **Vencimiento**: mientras el pedido está en curso, el link anda siempre (tarde lo que tarde el local); una vez entregado o cancelado, sigue andando **2 horas** más (para ver "¡Gracias por tu pedido!" o el aviso de cancelado); y nunca más de **24 horas** desde que se hizo, para un pedido que quedó colgado. Los dos plazos están en **un solo lugar**, la función `plazos_seguimiento()`: para cambiarlos alcanza con una migración que la reemplace. Al cliente se le muestra: "El local está revisando tu pedido" (`pendiente_confirmar`), "Están preparando tu pedido" (`confirmado` con algún ítem sin terminar), "Tu pedido está listo para retirar" o "Tu pedido va en camino" (todos los ítems `listo` o `entregado`, según retiro o envío), "¡Gracias por tu pedido!" (`entregado`) y, si se canceló, que consulte por WhatsApp. Se actualiza consultando cada 10 segundos, no por Realtime (ver "Realtime").
+- **Aviso "Tu pedido #N" en la landing**: vive de lo que el celular tiene guardado. La landing **no consulta** el estado del pedido (ni al entrar ni cada tanto): la abren muchos clientes a la vez y sería tráfico que se multiplica sin aportar nada. El aviso dice siempre "Tocá para ver cómo va" y lleva al seguimiento (que sí consulta, porque ahí el cliente está mirando a propósito). Se borra del celular en dos casos: cuando el cliente entra al seguimiento y el pedido ya está entregado o cancelado (o el link ya no existe), y por tiempo, como red de seguridad, a las **3 horas** de hecho el pedido (`VIGENCIA_PEDIDO_RECIENTE_MS` en `src/app/[slug]/almacen-local.ts`).
 
 ### Pedido desde la mesa con QR (plan `salon` o `completo`)
 
@@ -235,6 +242,17 @@ stateDiagram-v2
 - El mozo lo escanea desde su app; la app valida contra la base y crea la ronda en la cuenta abierta con `origen = 'qr_mesa'`.
 - Ventaja: no hay pedidos anónimos ni spam en la base.
 
+### Mostrador (pedidos de la landing)
+
+- Pantalla `/app/pedidos`, para dueño y mostrador, solo con plan con take away. El mostrador cae directo ahí al loguearse.
+- Pestañas: **Nuevos** (pendientes), **En cocina** (aceptados con algo sin terminar) y **Listos para entregar** (aceptados con todo listo). Las rondas de salón no aparecen: tienen su circuito (mozo, cuentas).
+- Cada acción es una función de la base que valida adentro rol (dueño o mostrador; el mozo no), estado y origen (`landing`), y bloquea el pedido mientras trabaja: si dos personas aceptan a la vez, la segunda recibe "Este pedido ya fue aceptado".
+  - `aceptar_pedido_landing`: pendiente → `confirmado`, con `confirmado_en`. Desde ese momento es una comanda más: cocina lo ve (sus ítems ya tienen sector desde que se crearon), con nombre del cliente, retiro o envío y la aclaración general, y su reloj cuenta desde la aceptación.
+  - `cambiar_item_pedido_landing`: solo **antes** de aceptar — cambia la cantidad de un ítem o lo saca (cantidad 0). El último ítem no se puede sacar: para eso está rechazar. Una vez aceptado no se edita más: los cambios se hablan con el cliente.
+  - `cancelar_pedido_landing`: rechazar (pendiente) o cancelar (ya aceptado), en cualquier momento antes de entregado. Sin motivo por ahora.
+  - `entregar_pedido_landing`: todo junto, cuando cocina terminó todo: marca los ítems `entregado` (con hora) y el trigger cierra el pedido, igual que en salón.
+- "Copiar link para el cliente" copia un mensaje con el link de seguimiento, para pegarlo en el chat de WhatsApp del cliente.
+
 ### Mozo
 
 - Abre la cuenta de la mesa, carga rondas (incluso de un solo producto), marca ítems entregados y cierra la mesa.
@@ -242,8 +260,9 @@ stateDiagram-v2
 
 ## Realtime
 
-- Pantallas de sector: suscripción a `pedido_items` filtrando por `comercio_id` y `sector_id`.
-- Mostrador y mozos: suscripción a `pedidos` y `pedido_items` del comercio.
+- Pantallas de sector: suscripción a `pedido_items` del sector, y a los cambios de `pedidos` del comercio (el mostrador acepta o cancela cambiando el pedido, no sus ítems).
+- Mostrador: suscripción a `pedidos` y `pedido_items` del comercio. Mozos: `pedido_items` y `cuentas`.
+- El seguimiento del cliente (landing) **no** usa Realtime: es anónimo (RLS no le manda ningún cambio, y abrírselo expondría pedidos ajenos) y cada cliente mirando su pedido gastaría una conexión de las del local. Consulta cada 10 segundos mientras la pantalla está a la vista.
 - Cada pantalla abierta es una conexión. Supabase Pro incluye 500 simultáneas (~50-80 locales activos).
 
 ## Fuera del Plan 1

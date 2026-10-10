@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 
+import { normalizarWhatsapp, validarWhatsapp } from "@/lib/comercios/validacion";
 import type { Database } from "@/types/database";
 
 import {
@@ -12,7 +13,7 @@ import {
 
 type ComercioEditable = Pick<
   Database["public"]["Tables"]["comercios"]["Row"],
-  "id" | "nombre" | "plan" | "estado" | "limite_usuarios"
+  "id" | "nombre" | "plan" | "estado" | "limite_usuarios" | "whatsapp"
 >;
 
 const ESTADO_INICIAL: EstadoEditarComercio = {};
@@ -53,11 +54,19 @@ export function FormularioEditarComercio({
   const [limiteUsuarios, setLimiteUsuarios] = useState(
     estado.valores?.limiteUsuarios ?? String(comercio.limite_usuarios),
   );
+  const [whatsapp, setWhatsapp] = useState(
+    estado.valores?.whatsapp ?? comercio.whatsapp ?? "",
+  );
+  // Para el link de prueba: solo si lo escrito ya es un número válido.
+  const whatsappNormalizado = normalizarWhatsapp(whatsapp);
+  const whatsappProbable =
+    whatsappNormalizado !== "" && validarWhatsapp(whatsappNormalizado) === null;
 
   const refNombre = useRef<HTMLInputElement>(null);
   const refPlan = useRef<HTMLSelectElement>(null);
   const refEstado = useRef<HTMLSelectElement>(null);
   const refLimite = useRef<HTMLInputElement>(null);
+  const refWhatsapp = useRef<HTMLInputElement>(null);
 
   // Foco al campo que causó el error. Depende de `estado` completo (no de
   // `estado.campo`) para que también dispare si dos envíos seguidos fallan
@@ -72,6 +81,7 @@ export function FormularioEditarComercio({
       plan: refPlan,
       estado: refEstado,
       limite_usuarios: refLimite,
+      whatsapp: refWhatsapp,
     };
     refs[estado.campo].current?.focus();
   }, [estado]);
@@ -161,6 +171,45 @@ export function FormularioEditarComercio({
         />
         {estado.campo === "limite_usuarios" && (
           <p className="mt-1 text-xs text-red-600">{estado.error}</p>
+        )}
+      </div>
+
+      <div>
+        <label htmlFor="whatsapp" className={ESTILO_LABEL}>
+          WhatsApp del local (opcional)
+        </label>
+        <input
+          ref={refWhatsapp}
+          id="whatsapp"
+          name="whatsapp"
+          type="tel"
+          inputMode="tel"
+          placeholder="54 9 11 2233-4455"
+          value={whatsapp}
+          onChange={(evento) => setWhatsapp(evento.target.value)}
+          className={claseInput(estado.campo === "whatsapp")}
+        />
+        {estado.campo === "whatsapp" ? (
+          <p className="mt-1 text-xs text-red-600">{estado.error}</p>
+        ) : (
+          <p className="mt-1 text-xs text-neutral-500">
+            Con código de país, sin el 0 ni el 15. Para un celular de
+            Argentina: 54 9 + característica + número. Es a donde el cliente
+            de la landing le avisa su pedido; vacío, no se le ofrece.
+            {whatsappProbable && (
+              <>
+                {" "}
+                <a
+                  href={`https://wa.me/${whatsappNormalizado}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-medium text-neutral-700 underline"
+                >
+                  Probar el número
+                </a>
+              </>
+            )}
+          </p>
         )}
       </div>
 

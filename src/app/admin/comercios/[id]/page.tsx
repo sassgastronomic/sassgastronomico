@@ -23,7 +23,7 @@ export default async function PaginaEditarComercio({
   // distinguir el motivo acá.
   const { data: comercio } = await supabase
     .from("comercios")
-    .select("id, nombre, slug, plan, estado, limite_usuarios")
+    .select("id, nombre, slug, plan, estado, limite_usuarios, whatsapp")
     .eq("id", id)
     .single();
 

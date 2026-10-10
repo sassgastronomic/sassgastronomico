@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { formatearTiempoAbierta } from "@/lib/salon/tiempo";
 import { estaDemorado } from "@/lib/sector/tiempo";
 import { suscribirseConSesion } from "@/lib/supabase/realtime";
-import type { EstadoItem } from "@/types/database";
+import type { EstadoItem, ModalidadPedido } from "@/types/database";
 
 import { avanzarItem, avanzarPedido, retrocederItem } from "./actions";
 
@@ -23,8 +23,17 @@ export type ItemPedido = {
 export type PedidoConItems = {
   id: string;
   numero: number | null;
-  creadoEn: string;
+  // Desde cuándo corre el reloj: cuando se cargó (salón) o cuando el
+  // mostrador lo aceptó (pedido online) — ver page.tsx.
+  inicio: string;
   mesaNombre: string | null;
+  // Solo pedidos de la landing: a nombre de quién, retiro o envío, y la
+  // aclaración general del pedido (las de cada ítem van en el ítem).
+  online: {
+    cliente: string;
+    modalidad: ModalidadPedido | null;
+    nota: string | null;
+  } | null;
   items: ItemPedido[];
 };
 
@@ -82,9 +91,11 @@ function filtrarPorSolapa(
  *   pedirlo cada vez que vuelve a primer plano.
  */
 export function PantallaSector({
+  comercioId,
   sectorId,
   pedidos,
 }: {
+  comercioId: string;
   sectorId: string;
   pedidos: PedidoConItems[];
 }) {
@@ -161,11 +172,13 @@ export function PantallaSector({
       }, 400);
     }
 
-    // Solo escucha `pedido_items`. Hoy alcanza porque todo pedido nace
-    // `confirmado` (lo carga el mozo), pero cuando el mostrador confirme o
-    // cancele pedidos va a cambiar `pedidos.estado` sin tocar sus ítems, y
-    // esta pantalla (que filtra por pedido confirmado) no se va a enterar:
-    // ahí hay que sumar una suscripción a `pedidos`.
+    // Dos tablas:
+    // - `pedido_items` del sector: una ronda nueva del mozo, o un cambio de
+    //   estado de un ítem (desde esta pantalla o desde otra tablet).
+    // - `pedidos` del comercio: el mostrador acepta o cancela un pedido
+    //   online cambiando el pedido, no sus ítems — sin esto, un pedido
+    //   aceptado no aparecería hasta el próximo refresco. Un pedido aceptado
+    //   cuenta como "nuevo" para el aviso, igual que una ronda del mozo.
     const desuscribirse = suscribirseConSesion((supabase) =>
       supabase
         .channel(`sector-${sectorId}`)
@@ -179,6 +192,19 @@ export function PantallaSector({
           },
           (payload) => programarRefresco(payload.eventType === "INSERT"),
         )
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "pedidos",
+            filter: `comercio_id=eq.${comercioId}`,
+          },
+          (payload) => {
+            const fila = payload.new;
+            programarRefresco("estado" in fila && fila.estado === "confirmado");
+          },
+        )
         .subscribe((estado) => {
           setConectado(estado === "SUBSCRIBED");
           if (estado === "SUBSCRIBED") {
@@ -191,7 +217,7 @@ export function PantallaSector({
       if (timeoutId) clearTimeout(timeoutId);
       desuscribirse();
     };
-  }, [sectorId, router]);
+  }, [comercioId, sectorId, router]);
 
   async function alAvanzarItem(itemId: string) {
     await avanzarItem(itemId, sectorId);
@@ -272,7 +298,7 @@ export function PantallaSector({
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {pedidosVisibles.map((pedido) => {
-            const demorado = estaDemorado(pedido.creadoEn);
+            const demorado = estaDemorado(pedido.inicio);
             return (
               <div
                 key={pedido.id}
@@ -288,11 +314,17 @@ export function PantallaSector({
                       #{pedido.numero ?? "—"}
                     </p>
                     <p className="mt-1 text-sm font-bold tracking-wide text-neutral-500 uppercase">
-                      {pedido.mesaNombre ? "Mesa" : "Para llevar"}
+                      {pedido.online
+                        ? pedido.online.modalidad === "envio"
+                          ? "Envío"
+                          : "Retiro"
+                        : pedido.mesaNombre
+                          ? "Mesa"
+                          : "Para llevar"}
                     </p>
-                    {pedido.mesaNombre && (
+                    {(pedido.online?.cliente || pedido.mesaNombre) && (
                       <p className="text-xl font-bold text-neutral-800">
-                        {pedido.mesaNombre}
+                        {pedido.online?.cliente || pedido.mesaNombre}
                       </p>
                     )}
                   </div>
@@ -307,10 +339,16 @@ export function PantallaSector({
                         demorado ? "text-red-700" : "text-neutral-500"
                       }`}
                     >
-                      {formatearTiempoAbierta(pedido.creadoEn)}
+                      {formatearTiempoAbierta(pedido.inicio)}
                     </p>
                   </div>
                 </div>
+
+                {pedido.online?.nota && (
+                  <p className="mt-3 rounded-xl border-2 border-amber-300 bg-amber-50 px-3 py-2 text-lg font-bold text-amber-900">
+                    Aclaración: {pedido.online.nota}
+                  </p>
+                )}
 
                 <div className="mt-4 space-y-3">
                   {pedido.items.map((item) => (

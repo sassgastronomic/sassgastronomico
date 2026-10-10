@@ -6,12 +6,19 @@ import { redirect } from "next/navigation";
 import {
   esEstadoValido,
   esPlanValido,
+  normalizarWhatsapp,
   validarLimiteUsuarios,
   validarNombreComercio,
+  validarWhatsapp,
 } from "@/lib/comercios/validacion";
 import { crearClienteServidor } from "@/lib/supabase/server";
 
-export type CampoEditarComercio = "nombre" | "plan" | "estado" | "limite_usuarios";
+export type CampoEditarComercio =
+  | "nombre"
+  | "plan"
+  | "estado"
+  | "limite_usuarios"
+  | "whatsapp";
 
 export type EstadoEditarComercio = {
   error?: string;
@@ -26,11 +33,13 @@ export type EstadoEditarComercio = {
     plan: string;
     estado: string;
     limiteUsuarios: string;
+    whatsapp: string;
   };
 };
 
 /**
- * Actualiza nombre, plan, límite de usuarios y estado de un comercio. El
+ * Actualiza nombre, plan, límite de usuarios, estado y WhatsApp (el número
+ * al que la landing le ofrece al cliente avisar su pedido) de un comercio. El
  * slug no se toca acá: cambiarlo rompería los links ya compartidos
  * (`/{slug}`, QR de mesa, etc.), así que ni siquiera se lee del formulario.
  */
@@ -43,6 +52,7 @@ export async function actualizarComercio(
   const plan = String(formData.get("plan") ?? "");
   const estadoComercio = String(formData.get("estado") ?? "");
   const limiteUsuariosTexto = String(formData.get("limite_usuarios") ?? "");
+  const whatsappTexto = String(formData.get("whatsapp") ?? "").trim();
 
   if (!id) {
     return { error: "Falta el comercio a editar." };
@@ -53,6 +63,7 @@ export async function actualizarComercio(
     plan,
     estado: estadoComercio,
     limiteUsuarios: limiteUsuariosTexto,
+    whatsapp: whatsappTexto,
   };
 
   const errorNombre = validarNombreComercio(nombre);
@@ -72,6 +83,12 @@ export async function actualizarComercio(
   }
 
   const limiteUsuarios = Number(limiteUsuariosTexto);
+
+  const whatsapp = normalizarWhatsapp(whatsappTexto);
+  const errorWhatsapp = validarWhatsapp(whatsapp);
+  if (errorWhatsapp) {
+    return { error: errorWhatsapp, campo: "whatsapp", valores };
+  }
 
   // Confirmar que quien invoca esto es admin, sin depender solo del layout
   // de /admin (esta Server Action es su propio endpoint).
@@ -102,6 +119,7 @@ export async function actualizarComercio(
       plan,
       estado: estadoComercio,
       limite_usuarios: limiteUsuarios,
+      whatsapp: whatsapp || null,
     })
     .eq("id", id);
 
