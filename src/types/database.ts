@@ -698,6 +698,18 @@ export interface Database {
         Args: { p_cuenta_id: string; p_items: ItemPedidoMozo[] };
         Returns: { pedido_id: string; numero: number };
       };
+      // Cierra la cuenta solo si no queda nada sin entregar; si queda,
+      // devuelve `ok: false` con cuántos ítems hay en cada estado (y no
+      // cierra). Bloquea la cuenta mientras tanto — ver supabase/migrations/.
+      cerrar_cuenta: {
+        Args: { p_cuenta_id: string };
+        Returns: {
+          ok: boolean;
+          pendiente: number;
+          en_preparacion: number;
+          listo: number;
+        };
+      };
     };
   };
 }

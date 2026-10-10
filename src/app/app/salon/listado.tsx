@@ -10,7 +10,8 @@ import { abrirCuenta } from "./actions";
 export type MesaSalon = {
   id: string;
   nombre: string;
-  cuenta: { abiertaEn: string } | null;
+  // `listos`: unidades que cocina ya terminó y el mozo todavía no llevó.
+  cuenta: { abiertaEn: string; listos: number } | null;
 };
 
 export type ZonaSalon = {
@@ -23,6 +24,9 @@ const ESTILO_BADGE_AMBAR =
   "inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-sm font-semibold text-amber-800";
 const ESTILO_BADGE_GRIS =
   "inline-flex items-center rounded-full bg-neutral-100 px-2.5 py-1 text-sm font-medium text-neutral-600";
+// Azul y no verde para "listo": el verde ya es "mesa libre" en esta pantalla.
+const ESTILO_BADGE_AZUL =
+  "inline-flex items-center rounded-full bg-blue-600 px-2.5 py-1 text-sm font-bold text-white";
 
 function claveAlmacenamiento(comercioId: string, usuarioId: string): string {
   return `salon:zonas-abiertas:${comercioId}:${usuarioId}`;
@@ -131,6 +135,10 @@ export function ListadoSalon({
         const ocupadas = zona.mesas.filter(
           (mesa) => mesa.cuenta !== null,
         ).length;
+        const listos = zona.mesas.reduce(
+          (suma, mesa) => suma + (mesa.cuenta?.listos ?? 0),
+          0,
+        );
         const abierta = unicaZona || abiertas.has(zona.id);
 
         return (
@@ -146,7 +154,12 @@ export function ListadoSalon({
               <span className="text-lg font-bold text-neutral-900">
                 {zona.nombre}
               </span>
-              <span className="flex shrink-0 items-center gap-2">
+              <span className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                {listos > 0 && (
+                  <span className={ESTILO_BADGE_AZUL}>
+                    {listos} para llevar
+                  </span>
+                )}
                 {ocupadas > 0 && (
                   <span className={ESTILO_BADGE_AMBAR}>
                     {ocupadas} ocupada{ocupadas === 1 ? "" : "s"}
@@ -160,7 +173,26 @@ export function ListadoSalon({
 
             <div className="grid grid-cols-1 gap-3 border-t border-neutral-200 p-4 sm:grid-cols-2">
               {zona.mesas.map((mesa) =>
-                mesa.cuenta ? (
+                mesa.cuenta && mesa.cuenta.listos > 0 ? (
+                  <Link
+                    key={mesa.id}
+                    href={`/app/salon/${mesa.id}`}
+                    className="flex min-h-28 flex-col justify-between rounded-2xl border-4 border-blue-600 bg-blue-50 p-5 active:bg-blue-100"
+                  >
+                    <span className="flex items-start justify-between gap-3">
+                      <span className="text-2xl font-bold text-neutral-900">
+                        {mesa.nombre}
+                      </span>
+                      <span className="text-base text-neutral-600">
+                        {formatearTiempoAbierta(mesa.cuenta.abiertaEn)}
+                      </span>
+                    </span>
+                    <span className="mt-2 rounded-xl bg-blue-600 px-3 py-2 text-center text-lg font-bold text-white">
+                      {mesa.cuenta.listos} listo
+                      {mesa.cuenta.listos === 1 ? "" : "s"} para llevar
+                    </span>
+                  </Link>
+                ) : mesa.cuenta ? (
                   <Link
                     key={mesa.id}
                     href={`/app/salon/${mesa.id}`}

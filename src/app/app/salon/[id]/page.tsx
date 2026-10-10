@@ -3,14 +3,34 @@ import { notFound, redirect } from "next/navigation";
 
 import { obtenerContextoComercio } from "@/lib/comercio/contexto";
 import { planPermiteSalon } from "@/lib/mesas/validacion";
+import { armarResumen } from "@/lib/salon/resumen";
 import { formatearTiempoAbierta } from "@/lib/salon/tiempo";
 import { crearClienteServidor } from "@/lib/supabase/server";
+import type { EstadoItem } from "@/types/database";
 
+import { ActualizarEnVivo } from "../actualizar-en-vivo";
+
+import { marcarEntregado, marcarTodoEntregado } from "./actions";
+import { BotonEnvio } from "./boton-envio";
+import { CerrarCuenta } from "./cerrar-cuenta";
 import {
   CargaPedido,
   type CategoriaPicker,
   type ProductoPicker,
 } from "./carga-pedido";
+
+// Azul para "listo" (lo que el mozo tiene que llevar), igual que en
+// /app/salon — el verde ahí es "mesa libre". Siempre con texto, no solo
+// color.
+const ESTADO_ITEM: Record<EstadoItem, { texto: string; clase: string }> = {
+  pendiente: { texto: "Pendiente", clase: "bg-neutral-200 text-neutral-700" },
+  en_preparacion: {
+    texto: "En preparación",
+    clase: "bg-amber-100 text-amber-900",
+  },
+  listo: { texto: "Listo", clase: "bg-blue-600 text-white" },
+  entregado: { texto: "Entregado", clase: "bg-green-100 text-green-800" },
+};
 
 const formateadorPrecio = new Intl.NumberFormat("es-AR", {
   style: "currency",
@@ -36,6 +56,7 @@ type RondaItem = {
   precioUnitario: number;
   cantidad: number;
   nota: string | null;
+  estado: EstadoItem;
   adicionales: { nombre: string; precioExtra: number }[];
 };
 
@@ -43,6 +64,11 @@ type Ronda = {
   id: string;
   numero: number | null;
   creadoEn: string;
+  // Solo lo de pedidos confirmados va a "Listo para llevar" (mismo filtro
+  // que la pantalla de cocina).
+  confirmado: boolean;
+  // Lo cancelado no se cobra ni bloquea el cierre de la mesa.
+  cancelado: boolean;
   items: RondaItem[];
 };
 
@@ -155,7 +181,7 @@ async function obtenerRondas(
 
   const { data: pedidos } = await supabase
     .from("pedidos")
-    .select("id, numero, creado_en")
+    .select("id, numero, creado_en, estado")
     .eq("cuenta_id", cuentaId)
     .eq("comercio_id", comercioId)
     .order("creado_en", { ascending: false });
@@ -167,7 +193,7 @@ async function obtenerRondas(
   const { data: items } = await supabase
     .from("pedido_items")
     .select(
-      "id, pedido_id, nombre, categoria_nombre, precio_unitario, cantidad, nota",
+      "id, pedido_id, nombre, categoria_nombre, precio_unitario, cantidad, nota, estado",
     )
     .eq("comercio_id", comercioId)
     .in("pedido_id", pedidoIds)
@@ -204,6 +230,7 @@ async function obtenerRondas(
       precioUnitario: item.precio_unitario,
       cantidad: item.cantidad,
       nota: item.nota,
+      estado: item.estado,
       adicionales: adicionalesPorItem.get(item.id) ?? [],
     });
     itemsPorPedido.set(item.pedido_id, lista);
@@ -213,6 +240,8 @@ async function obtenerRondas(
     id: pedido.id,
     numero: pedido.numero,
     creadoEn: pedido.creado_en,
+    confirmado: pedido.estado === "confirmado",
+    cancelado: pedido.estado === "cancelado",
     items: itemsPorPedido.get(pedido.id) ?? [],
   }));
 }
@@ -261,7 +290,7 @@ export default async function PaginaSalonMesa({
     .maybeSingle();
 
   if (!cuenta) {
-    redirect("/app/salon");
+    redirect("/app/salon?error=sin_cuenta");
   }
 
   const [categorias, rondas] = await Promise.all([
@@ -273,14 +302,108 @@ export default async function PaginaSalonMesa({
     categorias,
   );
 
+  // Lo que cocina ya terminó, de la ronda más vieja a la más nueva: lo que
+  // espera hace más tiempo se lleva primero.
+  const listos = rondas
+    .filter((ronda) => ronda.confirmado)
+    .toReversed()
+    .flatMap((ronda) =>
+      ronda.items
+        .filter((item) => item.estado === "listo")
+        .map((item) => ({ ...item, rondaNumero: ronda.numero })),
+    );
+  const unidadesListas = listos.reduce((suma, item) => suma + item.cantidad, 0);
+
+  // Para cerrar la cuenta: lo consumido (sin lo cancelado) y lo que falta
+  // entregar. La base lo vuelve a contar al cerrar; esto es para mostrar.
+  const itemsCobrables = rondas
+    .filter((ronda) => !ronda.cancelado)
+    .flatMap((ronda) => ronda.items);
+  const resumen = armarResumen(itemsCobrables);
+  const pendientes = {
+    pendiente: itemsCobrables.filter((i) => i.estado === "pendiente").length,
+    en_preparacion: itemsCobrables.filter((i) => i.estado === "en_preparacion")
+      .length,
+    listo: itemsCobrables.filter((i) => i.estado === "listo").length,
+  };
+
   return (
     <div className="space-y-6 pb-8">
+      <ActualizarEnVivo
+        comercioId={contexto.comercio.id}
+        cuentaId={cuenta.id}
+        escucharCarta
+      />
+
       <Link
         href="/app/salon"
         className="inline-block text-base font-medium text-neutral-600"
       >
         ← Mesas
       </Link>
+
+      {listos.length > 0 && (
+        <section className="space-y-3 rounded-2xl border-4 border-blue-600 bg-blue-50 p-4">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="text-xl font-bold text-blue-900">
+              Listo para llevar
+            </h2>
+            <span className="text-base font-semibold text-blue-800">
+              {unidadesListas} {unidadesListas === 1 ? "plato" : "platos"}
+            </span>
+          </div>
+
+          {listos.map((item) => (
+            <div
+              key={item.id}
+              className="flex items-center justify-between gap-3 rounded-xl bg-white p-3"
+            >
+              <div className="min-w-0">
+                <p className="text-lg font-bold text-neutral-900">
+                  {item.cantidad}× {item.nombre}
+                </p>
+                {item.categoriaNombre && (
+                  <p className="text-sm text-neutral-500">
+                    {item.categoriaNombre}
+                  </p>
+                )}
+                {item.adicionales.length > 0 && (
+                  <p className="text-sm text-neutral-600">
+                    {item.adicionales.map((a) => a.nombre).join(", ")}
+                  </p>
+                )}
+                {item.nota && (
+                  <p className="text-sm font-semibold text-amber-800">
+                    &quot;{item.nota}&quot;
+                  </p>
+                )}
+                <p className="text-xs text-neutral-400">
+                  Ronda #{item.rondaNumero ?? "—"}
+                </p>
+              </div>
+              <form action={marcarEntregado.bind(null, mesa.id, item.id)}>
+                <BotonEnvio
+                  textoPendiente="…"
+                  className="min-h-14 min-w-28 rounded-xl bg-blue-600 px-4 text-base font-bold text-white active:bg-blue-700"
+                >
+                  Entregar
+                </BotonEnvio>
+              </form>
+            </div>
+          ))}
+
+          {listos.length > 1 && (
+            <form action={marcarTodoEntregado.bind(null, mesa.id)}>
+              <BotonEnvio
+                textoPendiente="Entregando…"
+                className="min-h-16 w-full rounded-2xl bg-blue-700 px-5 text-xl font-bold text-white active:bg-blue-800"
+              >
+                Entregar todo ({unidadesListas})
+              </BotonEnvio>
+            </form>
+          )}
+        </section>
+      )}
 
       <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-6">
         <p className="text-sm font-semibold tracking-wide text-amber-700 uppercase">
@@ -324,7 +447,12 @@ export default async function PaginaSalonMesa({
               </div>
               <div className="mt-2 space-y-1.5">
                 {ronda.items.map((item) => (
-                  <div key={item.id} className="text-sm text-neutral-700">
+                  <div key={item.id} className="flow-root text-sm text-neutral-700">
+                    <span
+                      className={`float-right ml-2 rounded-full px-2.5 py-0.5 text-xs font-bold ${ESTADO_ITEM[item.estado].clase}`}
+                    >
+                      {ESTADO_ITEM[item.estado].texto}
+                    </span>
                     <p>
                       <span className="font-semibold text-neutral-900">
                         {item.cantidad}×
@@ -359,6 +487,13 @@ export default async function PaginaSalonMesa({
           ))}
         </div>
       )}
+
+      <CerrarCuenta
+        mesaId={mesa.id}
+        mesaNombre={mesa.nombre}
+        resumen={resumen}
+        pendientes={pendientes}
+      />
     </div>
   );
 }

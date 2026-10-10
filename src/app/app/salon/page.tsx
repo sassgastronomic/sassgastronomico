@@ -1,9 +1,11 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { obtenerContextoComercio } from "@/lib/comercio/contexto";
 import { planPermiteSalon } from "@/lib/mesas/validacion";
 import { crearClienteServidor } from "@/lib/supabase/server";
 
+import { ActualizarEnVivo } from "./actualizar-en-vivo";
 import { ListadoSalon, type MesaSalon, type ZonaSalon } from "./listado";
 
 const MENSAJE_ERROR: Record<string, string> = {
@@ -11,14 +13,16 @@ const MENSAJE_ERROR: Record<string, string> = {
     "Esa mesa ya la abrió otro mozo justo ahora. Se actualizó la pantalla.",
   mesa_no_disponible: "Esa mesa ya no está disponible.",
   no_se_pudo_abrir: "No se pudo abrir la mesa. Probá de nuevo.",
+  sin_cuenta: "Esa mesa ya no tiene una cuenta abierta: puede que la hayan cerrado.",
 };
 
 /**
- * Zonas activas con sus mesas activas, más — de una consulta aparte a
- * `cuentas` — cuáles están ocupadas ahora mismo y desde cuándo. Tres
- * consultas de tamaño fijo, nada de una por mesa. Mismo criterio que
- * /app/mesas: "solo lo activo de lo activo", pero acá no hace falta
- * mostrar lo inactivo (esto no es una pantalla de administración).
+ * Zonas activas con sus mesas activas, más — de consultas aparte —
+ * cuáles están ocupadas ahora mismo, desde cuándo, y cuántos ítems tienen
+ * listos para llevar. Cuatro consultas de tamaño fijo, nada de una por
+ * mesa. Mismo criterio que /app/mesas: "solo lo activo de lo activo",
+ * pero acá no hace falta mostrar lo inactivo (esto no es una pantalla de
+ * administración).
  */
 async function obtenerZonasConMesas(comercioId: string): Promise<ZonaSalon[]> {
   const supabase = await crearClienteServidor();
@@ -46,22 +50,53 @@ async function obtenerZonasConMesas(comercioId: string): Promise<ZonaSalon[]> {
 
   const { data: cuentas } = await supabase
     .from("cuentas")
-    .select("mesa_id, abierta_en")
+    .select("id, mesa_id, abierta_en")
     .eq("comercio_id", comercioId)
     .eq("estado", "abierta");
 
+  const cuentaIds = (cuentas ?? []).map((cuenta) => cuenta.id);
+
+  // Ítems listos (cocina ya los terminó) de pedidos confirmados de las
+  // cuentas abiertas. Se cuentan unidades, no líneas: "2× Lomito" son dos
+  // platos para llevar.
+  const { data: listos } =
+    cuentaIds.length > 0
+      ? await supabase
+          .from("pedido_items")
+          .select("cantidad, pedidos!inner(cuenta_id, estado)")
+          .eq("comercio_id", comercioId)
+          .eq("estado", "listo")
+          .eq("pedidos.estado", "confirmado")
+          .in("pedidos.cuenta_id", cuentaIds)
+      : { data: [] };
+
+  const listosPorCuenta = new Map<string, number>();
+  for (const item of listos ?? []) {
+    const cuentaId = item.pedidos.cuenta_id;
+    if (!cuentaId) continue;
+    listosPorCuenta.set(
+      cuentaId,
+      (listosPorCuenta.get(cuentaId) ?? 0) + item.cantidad,
+    );
+  }
+
   const cuentaPorMesa = new Map(
-    (cuentas ?? []).map((cuenta) => [cuenta.mesa_id, cuenta.abierta_en]),
+    (cuentas ?? []).map((cuenta) => [
+      cuenta.mesa_id,
+      {
+        abiertaEn: cuenta.abierta_en,
+        listos: listosPorCuenta.get(cuenta.id) ?? 0,
+      },
+    ]),
   );
 
   const mesasPorZona = new Map<string, MesaSalon[]>();
   for (const mesa of mesas ?? []) {
-    const abiertaEn = cuentaPorMesa.get(mesa.id);
     const lista = mesasPorZona.get(mesa.zona_id) ?? [];
     lista.push({
       id: mesa.id,
       nombre: mesa.nombre,
-      cuenta: abiertaEn ? { abiertaEn } : null,
+      cuenta: cuentaPorMesa.get(mesa.id) ?? null,
     });
     mesasPorZona.set(mesa.zona_id, lista);
   }
@@ -98,11 +133,42 @@ export default async function PaginaSalon({
 
   const zonas = await obtenerZonasConMesas(contexto.comercio.id);
 
+  // Lo primero que mira el mozo al entrar: qué tiene para llevar. Va
+  // arriba de las zonas (que pueden estar plegadas) para que nunca quede
+  // escondido.
+  const mesasConListos = zonas.flatMap((zona) =>
+    zona.mesas.filter((mesa) => (mesa.cuenta?.listos ?? 0) > 0),
+  );
+
   return (
     <div className="space-y-6 pb-8">
+      <ActualizarEnVivo comercioId={contexto.comercio.id} />
+
       <h1 className="text-xl font-semibold text-neutral-900">
         Atender mesas
       </h1>
+
+      {mesasConListos.length > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-sm font-bold tracking-wide text-blue-800 uppercase">
+            Listo para llevar
+          </h2>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {mesasConListos.map((mesa) => (
+              <Link
+                key={mesa.id}
+                href={`/app/salon/${mesa.id}`}
+                className="flex min-h-16 items-center justify-between gap-3 rounded-2xl bg-blue-600 px-5 py-4 text-white active:bg-blue-700"
+              >
+                <span className="text-xl font-bold">{mesa.nombre}</span>
+                <span className="text-base font-semibold">
+                  {mesa.cuenta?.listos} para llevar →
+                </span>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
 
       {mensajeError && (
         <p

@@ -1,7 +1,9 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
+
+import { idLocal } from "@/lib/id-local";
 
 import { confirmarPedido } from "./actions";
 
@@ -135,6 +137,7 @@ export function CargaPedido({
   const [pendiente, iniciarTransicion] = useTransition();
 
   const [busqueda, setBusqueda] = useState("");
+  const refBusqueda = useRef<HTMLInputElement>(null);
   const [productoEnEdicion, setProductoEnEdicion] =
     useState<ProductoPicker | null>(null);
   const [cantidadEdicion, setCantidadEdicion] = useState(1);
@@ -189,6 +192,28 @@ export function CargaPedido({
     return { grupos, sueltos };
   }, [categorias, busqueda, buscando]);
 
+  // `categorias` ya viene filtrada por disponibilidad efectiva
+  // (carta_publica, sin los sin_stock) y se mantiene al día sola:
+  // ActualizarEnVivo refresca la página cuando cambia un producto, una
+  // categoría o un sector. Lo que está en el carrito y ya no figura acá se
+  // apagó mientras el mozo armaba la ronda. No se saca solo — el mozo
+  // tiene que enterarse para avisarle a la mesa —: se marca en rojo y se
+  // bloquea el confirmar hasta que lo quite.
+  const idsDisponibles = useMemo(
+    () =>
+      new Set(
+        categorias.flatMap((categoria) =>
+          categoria.productos.map((producto) => producto.id),
+        ),
+      ),
+    [categorias],
+  );
+  const lineasNoDisponibles = carrito.filter(
+    (item) => !idsDisponibles.has(item.productoId),
+  ).length;
+  const edicionNoDisponible =
+    productoEnEdicion !== null && !idsDisponibles.has(productoEnEdicion.id);
+
   const cantidadCarrito = carrito.reduce((suma, item) => suma + item.cantidad, 0);
   const totalCarrito = carrito.reduce((suma, item) => suma + totalItem(item), 0);
 
@@ -221,14 +246,14 @@ export function CargaPedido({
   }
 
   function agregarAlCarrito() {
-    if (!productoEnEdicion) return;
+    if (!productoEnEdicion || edicionNoDisponible) return;
     const adicionalesElegidos = productoEnEdicion.adicionales.filter((a) =>
       adicionalesEdicion.has(a.id),
     );
     setCarrito((actual) => [
       ...actual,
       {
-        clave: crypto.randomUUID(),
+        clave: idLocal(),
         productoId: productoEnEdicion.id,
         nombre: productoEnEdicion.nombre,
         categoriaNombre: productoEnEdicion.categoriaNombre,
@@ -255,7 +280,11 @@ export function CargaPedido({
     setCarrito((actual) => actual.filter((item) => item.clave !== clave));
   }
 
+  // El bloqueo de acá es para que el mozo se entere a tiempo; el que manda
+  // es crear_pedido_mozo, que vuelve a validar la disponibilidad de cada
+  // producto al confirmar (puede apagarse entre el refresco y el toque).
   function confirmar() {
+    if (lineasNoDisponibles > 0) return;
     setError(null);
     iniciarTransicion(async () => {
       const resultado = await confirmarPedido(
@@ -279,19 +308,35 @@ export function CargaPedido({
 
   return (
     <div>
-      <div className="sticky top-0 z-30 -mx-4 bg-neutral-50 px-4 pt-1 pb-3">
+      {/* En Safari de iPhone quedaba dibujado un "Buscar…" doble. Por eso:
+          capa propia (transform-gpu) y campo de texto común con teclado de
+          búsqueda, no type="search", que en iOS suma su propia ✕ y una capa
+          interna para el texto de ayuda. */}
+      <div className="sticky top-0 z-30 -mx-4 transform-gpu bg-neutral-50 px-4 pt-1 pb-3">
         <div className="relative">
           <input
-            type="search"
+            ref={refBusqueda}
+            type="text"
+            inputMode="search"
+            enterKeyHint="search"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
             value={busqueda}
             onChange={(evento) => setBusqueda(evento.target.value)}
             placeholder="Buscar producto…"
-            className="w-full rounded-2xl border-2 border-neutral-300 bg-white px-5 py-4 text-lg outline-none focus:border-neutral-900"
+            className="w-full appearance-none rounded-2xl border-2 border-neutral-300 bg-white py-4 pr-14 pl-5 text-lg outline-none focus:border-neutral-900"
           />
           {busqueda.length > 0 && (
             <button
               type="button"
-              onClick={() => setBusqueda("")}
+              // Sin esto, tocar la ✕ le saca el foco al campo y cierra el
+              // teclado: para buscar otro producto había que volver a tocarlo.
+              onPointerDown={(evento) => evento.preventDefault()}
+              onClick={() => {
+                setBusqueda("");
+                refBusqueda.current?.focus();
+              }}
               aria-label="Borrar búsqueda"
               className="absolute top-1/2 right-2 -translate-y-1/2 rounded-full px-3 py-2 text-2xl leading-none font-bold text-neutral-400 active:bg-neutral-100"
             >
@@ -414,10 +459,16 @@ export function CargaPedido({
         <button
           type="button"
           onClick={() => setCarritoAbierto(true)}
-          className="fixed inset-x-0 bottom-0 z-40 flex items-center justify-between bg-neutral-900 px-5 py-4 text-white active:bg-neutral-800"
+          className={`fixed inset-x-0 bottom-0 z-40 flex items-center justify-between px-5 py-4 text-white ${
+            lineasNoDisponibles > 0
+              ? "bg-red-700 active:bg-red-800"
+              : "bg-neutral-900 active:bg-neutral-800"
+          }`}
         >
           <span className="text-base font-semibold">
-            {cantidadCarrito} {cantidadCarrito === 1 ? "ítem" : "ítems"}
+            {lineasNoDisponibles > 0
+              ? `${lineasNoDisponibles} no ${lineasNoDisponibles === 1 ? "disponible" : "disponibles"}`
+              : `${cantidadCarrito} ${cantidadCarrito === 1 ? "ítem" : "ítems"}`}
           </span>
           <span className="text-lg font-bold">
             {formateadorPrecio.format(totalCarrito)}
@@ -439,6 +490,15 @@ export function CargaPedido({
           </div>
 
           <div className="flex-1 space-y-6 px-4 py-5 pb-32">
+            {edicionNoDisponible && (
+              <p
+                role="alert"
+                className="rounded-lg border-2 border-red-300 bg-red-50 px-4 py-3 text-base font-bold text-red-700"
+              >
+                Este producto se acaba de quedar sin disponibilidad. No se
+                puede agregar.
+              </p>
+            )}
             <div>
               <p className="text-2xl font-bold text-neutral-900">
                 {productoEnEdicion.nombre}
@@ -543,9 +603,12 @@ export function CargaPedido({
             <button
               type="button"
               onClick={agregarAlCarrito}
-              className="w-full rounded-2xl bg-neutral-900 px-5 py-5 text-xl font-bold text-white active:bg-neutral-700"
+              disabled={edicionNoDisponible}
+              className="w-full rounded-2xl bg-neutral-900 px-5 py-5 text-xl font-bold text-white active:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Agregar — {formateadorPrecio.format(totalEdicion)}
+              {edicionNoDisponible
+                ? "No disponible"
+                : `Agregar — ${formateadorPrecio.format(totalEdicion)}`}
             </button>
           </div>
         </div>
@@ -571,67 +634,87 @@ export function CargaPedido({
                 Todavía no agregaste nada.
               </p>
             ) : (
-              carrito.map((item) => (
-                <div
-                  key={item.clave}
-                  className="rounded-2xl border-2 border-neutral-200 p-4"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-lg font-bold text-neutral-900">
-                        {item.nombre}
+              carrito.map((item) => {
+                const disponible = idsDisponibles.has(item.productoId);
+                return (
+                  <div
+                    key={item.clave}
+                    className={`rounded-2xl border-2 p-4 ${
+                      disponible ? "border-neutral-200" : "border-red-500 bg-red-50"
+                    }`}
+                  >
+                    {!disponible && (
+                      <p className="mb-2 text-base font-black text-red-700">
+                        No disponible — quitalo del pedido
                       </p>
-                      <p className="text-sm text-neutral-500">
-                        {item.categoriaNombre}
+                    )}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p
+                          className={`text-lg font-bold ${
+                            disponible
+                              ? "text-neutral-900"
+                              : "text-red-700 line-through"
+                          }`}
+                        >
+                          {item.nombre}
+                        </p>
+                        <p className="text-sm text-neutral-500">
+                          {item.categoriaNombre}
+                        </p>
+                      </div>
+                      <p className="shrink-0 text-lg font-semibold text-neutral-900">
+                        {formateadorPrecio.format(totalItem(item))}
                       </p>
                     </div>
-                    <p className="shrink-0 text-lg font-semibold text-neutral-900">
-                      {formateadorPrecio.format(totalItem(item))}
-                    </p>
-                  </div>
-                  {item.adicionales.length > 0 && (
-                    <p className="mt-1 text-sm text-neutral-500">
-                      {item.adicionales.map((a) => a.nombre).join(", ")}
-                    </p>
-                  )}
-                  {item.nota && (
-                    <p className="mt-1 text-sm text-neutral-500 italic">
-                      &quot;{item.nota}&quot;
-                    </p>
-                  )}
+                    {item.adicionales.length > 0 && (
+                      <p className="mt-1 text-sm text-neutral-500">
+                        {item.adicionales.map((a) => a.nombre).join(", ")}
+                      </p>
+                    )}
+                    {item.nota && (
+                      <p className="mt-1 text-sm text-neutral-500 italic">
+                        &quot;{item.nota}&quot;
+                      </p>
+                    )}
 
-                  <div className="mt-3 flex items-center justify-between">
-                    <div className="flex items-center gap-4">
+                    <div className="mt-3 flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <button
+                          type="button"
+                          onClick={() => cambiarCantidadLinea(item.clave, -1)}
+                          aria-label={`Restar cantidad de ${item.nombre}`}
+                          className="h-11 w-11 rounded-full bg-neutral-100 text-xl font-bold text-neutral-900 active:bg-neutral-200"
+                        >
+                          −
+                        </button>
+                        <span className="w-6 text-center text-xl font-bold text-neutral-900">
+                          {item.cantidad}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => cambiarCantidadLinea(item.clave, 1)}
+                          aria-label={`Sumar cantidad de ${item.nombre}`}
+                          className="h-11 w-11 rounded-full bg-neutral-100 text-xl font-bold text-neutral-900 active:bg-neutral-200"
+                        >
+                          +
+                        </button>
+                      </div>
                       <button
                         type="button"
-                        onClick={() => cambiarCantidadLinea(item.clave, -1)}
-                        aria-label={`Restar cantidad de ${item.nombre}`}
-                        className="h-11 w-11 rounded-full bg-neutral-100 text-xl font-bold text-neutral-900 active:bg-neutral-200"
+                        onClick={() => quitarDelCarrito(item.clave)}
+                        className={
+                          disponible
+                            ? "text-base font-semibold text-red-700"
+                            : "rounded-xl bg-red-700 px-5 py-3 text-base font-bold text-white active:bg-red-800"
+                        }
                       >
-                        −
-                      </button>
-                      <span className="w-6 text-center text-xl font-bold text-neutral-900">
-                        {item.cantidad}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => cambiarCantidadLinea(item.clave, 1)}
-                        aria-label={`Sumar cantidad de ${item.nombre}`}
-                        className="h-11 w-11 rounded-full bg-neutral-100 text-xl font-bold text-neutral-900 active:bg-neutral-200"
-                      >
-                        +
+                        Quitar
                       </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => quitarDelCarrito(item.clave)}
-                      className="text-base font-semibold text-red-700"
-                    >
-                      Quitar
-                    </button>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
 
             {error && (
@@ -648,12 +731,22 @@ export function CargaPedido({
             <button
               type="button"
               onClick={confirmar}
-              disabled={pendiente || carrito.length === 0}
-              className="w-full rounded-2xl bg-neutral-900 px-5 py-5 text-xl font-bold text-white active:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={
+                pendiente || carrito.length === 0 || lineasNoDisponibles > 0
+              }
+              className={`w-full rounded-2xl px-5 py-5 text-xl font-bold text-white disabled:cursor-not-allowed ${
+                lineasNoDisponibles > 0
+                  ? "bg-red-700"
+                  : "bg-neutral-900 active:bg-neutral-700 disabled:opacity-60"
+              }`}
             >
-              {pendiente
-                ? "Confirmando…"
-                : `Confirmar pedido — ${formateadorPrecio.format(totalCarrito)}`}
+              {lineasNoDisponibles > 0
+                ? lineasNoDisponibles === 1
+                  ? "Quitá el producto no disponible para confirmar"
+                  : `Quitá los ${lineasNoDisponibles} productos no disponibles para confirmar`
+                : pendiente
+                  ? "Confirmando…"
+                  : `Confirmar pedido — ${formateadorPrecio.format(totalCarrito)}`}
             </button>
           </div>
         </div>
