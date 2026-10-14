@@ -47,17 +47,19 @@ export function PantallaEnviado({
   pedido: PedidoReciente | null;
   nombreCliente: string;
   estadoWhatsapp: EstadoWhatsapp;
-  onAbrirChat: (enlace: string) => void;
+  // Recibe el mensaje; la landing elige el link (app directa o wa.me).
+  onAbrirChat: (mensaje: string) => void;
   onVolverALaCarta: () => void;
 }) {
-  const enlaceChat = enlaceWhatsApp(
-    comercio.whatsapp,
+  const mensajeChat =
     pedido?.mensaje ??
-      mensajeConsultaPedido({
-        numero,
-        cliente_nombre: nombreCliente || undefined,
-      }),
-  );
+    mensajeConsultaPedido({
+      numero,
+      cliente_nombre: nombreCliente || undefined,
+    });
+  // El href queda en wa.me (funciona siempre, también al mantener apretado
+  // o sin JavaScript); el toque normal lo maneja la landing.
+  const enlaceChat = enlaceWhatsApp(comercio.whatsapp, mensajeChat);
 
   return (
     <div
@@ -80,10 +82,8 @@ export function PantallaEnviado({
           >
             Tu pedido es el #{numero}
           </h1>
-          <p aria-live="polite" className="mt-2 text-base text-neutral-600">
-            {estadoWhatsapp === "abriendo"
-              ? "Abriendo WhatsApp con tu pedido…"
-              : "Ya lo tiene el local."}
+          <p className="mt-2 text-base text-neutral-600">
+            Ya lo tiene el local.
           </p>
 
           {pedido ? (
@@ -135,17 +135,19 @@ export function PantallaEnviado({
           )}
         </div>
 
+        {estadoWhatsapp === "abriendo" && <CapaAbriendoWhatsapp />}
+
         <div className="mt-10 space-y-3">
           <a
             href={enlaceChat}
             target="_blank"
             rel="noopener noreferrer"
             onClick={(evento) => {
-              // Mismo camino que el intento automático: en el celular,
-              // misma pestaña (así al volver de WhatsApp se ve esta
-              // pantalla); en la compu, pestaña nueva.
+              // Mismo camino que el intento automático (app directa en el
+              // celular, con la capa de espera; wa.me si ya falló una vez,
+              // o en la compu).
               evento.preventDefault();
-              onAbrirChat(enlaceChat);
+              onAbrirChat(mensajeChat);
             }}
             className="flex w-full items-center justify-center gap-3 rounded-2xl bg-green-600 px-6 py-4 text-lg font-bold text-white shadow-lg shadow-green-600/20 active:bg-green-700"
           >
@@ -160,6 +162,34 @@ export function PantallaEnviado({
             Volver a la carta
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Mientras se abre WhatsApp, encima de esta pantalla. Semitransparente a
+ * propósito: el cliente alcanza a ver que hay algo debajo, y al volver
+ * encuentra ahí el link. La saca la landing (cuando el cliente vuelve a la
+ * pestaña, o al tope de espera): ver abrirWhatsapp en landing.tsx.
+ */
+function CapaAbriendoWhatsapp() {
+  return (
+    <div
+      role="status"
+      className="fixed inset-0 z-10 flex flex-col items-center justify-center gap-5 bg-neutral-50/75 px-8 text-center backdrop-blur-[2px]"
+    >
+      <span
+        aria-hidden="true"
+        className="h-14 w-14 animate-spin rounded-full border-4 border-green-200 border-t-green-600 motion-reduce:animate-none"
+      />
+      <div>
+        <p className="text-2xl font-bold text-neutral-900">
+          Abriendo WhatsApp…
+        </p>
+        <p className="mt-2 max-w-xs text-base text-pretty text-neutral-700">
+          Cuando vuelvas, vas a encontrar acá el link para seguir tu pedido.
+        </p>
       </div>
     </div>
   );

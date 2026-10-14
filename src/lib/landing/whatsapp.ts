@@ -15,6 +15,21 @@ export function enlaceWhatsApp(numero: string, mensaje: string): string {
   return `https://wa.me/${numero}?text=${encodeURIComponent(mensaje)}`;
 }
 
+/**
+ * Lo mismo, pero directo a la app (sin la página intermedia de wa.me que
+ * pregunta si abrirla). Solo sirve si WhatsApp está instalado: si no, el
+ * navegador no hace nada (o avisa que no puede abrir la dirección), así
+ * que siempre va con wa.me de respaldo — ver abrirWhatsapp en
+ * src/app/[slug]/landing.tsx.
+ *
+ * El texto va con encodeURIComponent, igual que en wa.me: los saltos de
+ * línea quedan como %0A, y "#", "&" o "+" no se confunden con partes de la
+ * dirección.
+ */
+export function enlaceAppWhatsApp(numero: string, mensaje: string): string {
+  return `whatsapp://send?phone=${numero}&text=${encodeURIComponent(mensaje)}`;
+}
+
 export type PedidoParaMensaje = {
   numero: number;
   cliente_nombre: string;
