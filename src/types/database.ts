@@ -26,6 +26,7 @@ export type EstadoComercio = "activo" | "suspendido";
 // ramas muertas en cada `Record<RolMiembro, _>` de la app.
 export type RolMiembro = "duenio" | "mostrador" | "mozo" | "sector";
 export type EstadoCuenta = "abierta" | "cerrada";
+export type EstadoCaja = "abierta" | "cerrada";
 export type OrigenPedido = "landing" | "mozo" | "qr_mesa" | "mostrador";
 export type EstadoPedido =
   | "pendiente_confirmar"
@@ -50,10 +51,27 @@ export type EstadoItem = "pendiente" | "en_preparacion" | "listo" | "entregado";
  * vista que necesite mostrar también eso, hace falta completarla con
  * consultas propias (ver src/app/app/carta/page.tsx).
  */
+/**
+ * Lo que devuelve `estado_landing(p_slug)`. `tomando_pedidos` dice lo
+ * mismo que `carta_publica` en `comercio.tomando_pedidos`; `sin_stock` son
+ * los ids de los productos activos marcados sin stock.
+ */
+export type EstadoLandingResultado = {
+  tomando_pedidos: boolean;
+  sin_stock: string[];
+};
+
 export type CartaPublicaResultado = {
   // Sin el id del comercio a propósito: la función es pública y la carta no
   // lo necesita.
-  comercio: { nombre: string; plan: PlanComercio; whatsapp: string | null };
+  comercio: {
+    nombre: string;
+    plan: PlanComercio;
+    whatsapp: string | null;
+    // Si hay caja abierta. Con la caja cerrada la landing muestra la carta
+    // pero no deja pedir (y crear_pedido_landing lo rechaza igual).
+    tomando_pedidos: boolean;
+  };
   categorias: {
     id: string;
     nombre: string;
@@ -109,6 +127,35 @@ export type SeguimientoPedidoResultado = {
   nota: string | null;
   creado_en: string;
   items: (ItemPedidoGuardado & { estado: EstadoItem })[];
+};
+
+/**
+ * Resumen de gestión de una jornada (`resumen_caja`, y la foto que guarda
+ * `cerrar_caja`): solo los pedidos de esa jornada, sin los cancelados en
+ * el total. Es un resumen interno: no es un comprobante ni reemplaza el
+ * cierre fiscal.
+ */
+export type ResumenJornada = {
+  jornada: string;
+  pedidos: {
+    salon_mesas: number;
+    salon_rondas: number;
+    take_away: number;
+    cancelados: number;
+  };
+  total: number;
+  categorias: {
+    nombre: string;
+    unidades: number;
+    total: number;
+    productos: { nombre: string; unidades: number; total: number }[];
+  }[];
+};
+
+// Lo que impide cerrar la caja (mismo criterio que al cerrar una mesa).
+export type PendientesCaja = {
+  mesas_abiertas: string[];
+  pedidos_sin_entregar: number[];
 };
 
 // ---------------------------------------------------------------------
@@ -672,6 +719,43 @@ export interface Database {
         ];
       };
 
+      cajas: {
+        Row: {
+          id: string;
+          comercio_id: string;
+          jornada: string;
+          estado: EstadoCaja;
+          abierta_por: string | null;
+          abierta_en: string;
+          cerrada_por: string | null;
+          cerrada_en: string | null;
+          resumen: ResumenJornada | null;
+          productos_reactivados: number | null;
+        };
+        // Nadie la escribe directo: abrir_caja / cerrar_caja.
+        Insert: {
+          id?: string;
+          comercio_id: string;
+          jornada: string;
+          estado?: EstadoCaja;
+          abierta_por?: string | null;
+          abierta_en?: string;
+          cerrada_por?: string | null;
+          cerrada_en?: string | null;
+          resumen?: ResumenJornada | null;
+          productos_reactivados?: number | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["cajas"]["Insert"]>;
+        Relationships: [
+          {
+            foreignKeyName: "cajas_comercio_id_fkey";
+            columns: ["comercio_id"];
+            referencedRelation: "comercios";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+
       contadores_pedidos: {
         Row: {
           comercio_id: string;
@@ -701,6 +785,21 @@ export interface Database {
       carta_publica: {
         Args: { p_slug: string };
         Returns: CartaPublicaResultado | null;
+      };
+      // Lo que la landing abierta consulta cada tanto (vía
+      // /api/landing/[slug]/estado, cacheado en el CDN). null si el
+      // comercio no existe o no está activo.
+      estado_landing: {
+        Args: { p_slug: string };
+        Returns: EstadoLandingResultado | null;
+      };
+      // Marca un producto sin stock (o con stock de nuevo). Dueño y
+      // mostrador: cualquiera del comercio; sector: solo los de sus
+      // sectores asignados (sector efectivo). Valida adentro y solo toca
+      // `sin_stock`.
+      cambiar_stock_producto: {
+        Args: { p_producto_id: string; p_sin_stock: boolean };
+        Returns: void;
       };
       // Miembros activos que cuentan para `comercios.limite_usuarios`: ver
       // src/lib/miembros/plan.ts para el espejo en TypeScript de esta misma
@@ -795,6 +894,36 @@ export interface Database {
       // Cierra la cuenta solo si no queda nada sin entregar; si queda,
       // devuelve `ok: false` con cuántos ítems hay en cada estado (y no
       // cierra). Bloquea la cuenta mientras tanto — ver supabase/migrations/.
+      // Caja (src/app/app/caja/): solo dueño y mostrador, validado adentro.
+      // situacion_caja devuelve null si quien pregunta no lo es.
+      situacion_caja: {
+        Args: { p_comercio_id: string };
+        Returns: {
+          jornada_actual: string;
+          abierta: {
+            id: string;
+            jornada: string;
+            abierta_en: string;
+            hora_apertura: string;
+            abierta_por: string | null;
+          } | null;
+          cerrada_hoy: boolean;
+        } | null;
+      };
+      abrir_caja: {
+        Args: { p_comercio_id: string };
+        Returns: { id: string; jornada: string; reabierta: boolean };
+      };
+      resumen_caja: {
+        Args: { p_caja_id: string };
+        Returns: ResumenJornada & { pendientes: PendientesCaja };
+      };
+      cerrar_caja: {
+        Args: { p_caja_id: string };
+        Returns:
+          | { ok: true; reactivados: number; resumen: ResumenJornada }
+          | { ok: false; pendientes: PendientesCaja };
+      };
       cerrar_cuenta: {
         Args: { p_cuenta_id: string };
         Returns: {

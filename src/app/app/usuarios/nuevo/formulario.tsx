@@ -17,7 +17,7 @@ const ESTADO_INICIAL: EstadoNuevoUsuario = {};
 
 const ESTILO_LABEL = "mb-1 block text-sm font-medium text-neutral-700";
 const ESTILO_INPUT_BASE =
-  "w-full rounded-md border px-3 py-2 text-sm outline-none focus:ring-1";
+  "w-full rounded-md border px-3 py-2 text-base outline-none focus:ring-1 sm:text-sm";
 const ESTILO_BOTON_LINK =
   "text-xs font-medium text-neutral-600 underline-offset-2 hover:text-neutral-900 hover:underline focus:underline";
 

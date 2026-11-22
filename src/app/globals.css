@@ -21,4 +21,10 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+
+  /* Nombres de productos, nombres de clientes, direcciones y aclaraciones son
+     texto libre: una palabra larga sin espacios estira su caja y aparece
+     scroll horizontal en el celular. Que corte y siga abajo. Para que alcance,
+     el hijo de un flex que la contenga tiene que poder achicarse (min-w-0). */
+  overflow-wrap: break-word;
 }

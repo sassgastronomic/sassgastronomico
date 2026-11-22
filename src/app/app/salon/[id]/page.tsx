@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
+import { obtenerCajaAbierta } from "@/lib/caja/caja";
 import { obtenerContextoComercio } from "@/lib/comercio/contexto";
 import { planPermiteSalon } from "@/lib/mesas/validacion";
 import { armarResumen } from "@/lib/salon/resumen";
@@ -293,10 +294,12 @@ export default async function PaginaSalonMesa({
     redirect("/app/salon?error=sin_cuenta");
   }
 
-  const [categorias, rondas] = await Promise.all([
+  const [categorias, rondas, caja] = await Promise.all([
     obtenerCategoriasParaPedir(contexto.comercio.slug),
     obtenerRondas(contexto.comercio.id, cuenta.id),
+    obtenerCajaAbierta(contexto.comercio.id),
   ]);
+  const cajaAbierta = caja !== null;
   const accesosRapidos = await obtenerAccesosRapidos(
     contexto.comercio.id,
     categorias,
@@ -421,11 +424,25 @@ export default async function PaginaSalonMesa({
         </p>
       </div>
 
-      <CargaPedido
-        cuentaId={cuenta.id}
-        categorias={categorias}
-        accesosRapidos={accesosRapidos}
-      />
+      {/* Sin caja abierta no se cargan rondas (la base las rechaza). Con
+          la regla de cierre no debería haber una mesa abierta sin caja,
+          pero si la hay, se avisa en vez de dejar cargar algo que va a
+          fallar. */}
+      {cajaAbierta ? (
+        <CargaPedido
+          cuentaId={cuenta.id}
+          categorias={categorias}
+          accesosRapidos={accesosRapidos}
+        />
+      ) : (
+        <p
+          role="alert"
+          className="rounded-2xl border-2 border-amber-300 bg-amber-50 px-4 py-4 text-base text-amber-950"
+        >
+          <strong className="font-bold">La caja no está abierta.</strong>{" "}
+          Pedile al mostrador que la abra para cargar pedidos.
+        </p>
+      )}
 
       {rondas.length > 0 && (
         <div className="space-y-3">

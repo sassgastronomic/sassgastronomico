@@ -88,6 +88,19 @@ export function ActualizarEnVivo({
           },
         );
 
+      // La caja: si el mostrador la abre o la cierra, el aviso de "caja
+      // cerrada" y las mesas libres cambian.
+      canal = canal.on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "cajas",
+          filter: `comercio_id=eq.${comercioId}`,
+        },
+        programarRefresco,
+      );
+
       // Las tres tablas de las que depende la disponibilidad efectiva (ver
       // docs/SCHEMA.md). La página vuelve a pedir `carta_publica` al
       // refrescar, así que no hace falta mirar qué cambió.

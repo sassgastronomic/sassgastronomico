@@ -1,5 +1,7 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { formatearJornada } from "@/lib/caja/caja";
 import { obtenerContextoComercio } from "@/lib/comercio/contexto";
 import { planPermiteTakeAway } from "@/lib/comercios/validacion";
 import { linkSeguimiento, origenDelRequest } from "@/lib/landing/link";
@@ -8,7 +10,17 @@ import { mensajeLinkSeguimiento } from "@/lib/landing/whatsapp";
 import { formatearTiempoAbierta } from "@/lib/salon/tiempo";
 import { crearClienteServidor } from "@/lib/supabase/server";
 
-import { PantallaMostrador, type PedidoMostrador } from "./pantalla-mostrador";
+import {
+  PantallaMostrador,
+  type EtapaMostrador,
+  type PedidoMostrador,
+} from "./pantalla-mostrador";
+
+const PESTANAS_VALIDAS: readonly EtapaMostrador[] = ["nuevo", "en_cocina", "listo"];
+
+function esPestana(valor: unknown): valor is EtapaMostrador {
+  return PESTANAS_VALIDAS.some((pestana) => pestana === valor);
+}
 
 function masNuevo(fechas: (string | null)[]): string | null {
   return fechas.reduce<string | null>(
@@ -134,7 +146,10 @@ async function obtenerPedidosOnline(
  * redirigir en ese último caso: /app manda al mostrador acá solo si el
  * plan lo tiene, y redirigir de vuelta armaría un bucle.
  */
-export default async function PaginaPedidos() {
+export default async function PaginaPedidos({
+  searchParams,
+}: PageProps<"/app/pedidos">) {
+  const { pestana } = await searchParams;
   const contexto = await obtenerContextoComercio();
   if (contexto.tipo !== "activo") {
     redirect("/app");
@@ -158,8 +173,75 @@ export default async function PaginaPedidos() {
     contexto.comercio.id,
     contexto.comercio.slug,
   );
+  const supabase = await crearClienteServidor();
+  const { data: situacion } = await supabase.rpc("situacion_caja", {
+    p_comercio_id: contexto.comercio.id,
+  });
 
   return (
-    <PantallaMostrador comercioId={contexto.comercio.id} pedidos={pedidos} />
+    <div className="space-y-4">
+      {situacion && (
+        <AvisoCaja
+          jornadaHoy={situacion.jornada_actual}
+          abierta={situacion.abierta?.jornada ?? null}
+        />
+      )}
+      <PantallaMostrador
+        comercioId={contexto.comercio.id}
+        pedidos={pedidos}
+        pestanaInicial={esPestana(pestana) ? pestana : "nuevo"}
+      />
+    </div>
+  );
+}
+
+// El estado de la caja arriba de todo: con la caja cerrada no entran
+// pedidos (la base los rechaza), así que lo primero es abrirla.
+function AvisoCaja({
+  jornadaHoy,
+  abierta,
+}: {
+  jornadaHoy: string;
+  abierta: string | null;
+}) {
+  if (!abierta) {
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border-2 border-amber-300 bg-amber-50 px-4 py-3">
+        <p className="text-base font-semibold text-amber-950">
+          La caja está cerrada: no entran pedidos online.
+        </p>
+        <Link
+          href="/app/caja"
+          className="rounded-xl bg-green-600 px-4 py-2.5 text-base font-bold text-white active:bg-green-700"
+        >
+          Abrir la caja
+        </Link>
+      </div>
+    );
+  }
+  if (abierta !== jornadaHoy) {
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border-2 border-red-300 bg-red-50 px-4 py-3">
+        <p className="text-base font-semibold text-red-900">
+          Quedó abierta la caja de la jornada {formatearJornada(abierta)}:
+          cerrala antes de empezar la de hoy.
+        </p>
+        <Link
+          href="/app/caja"
+          className="rounded-xl bg-neutral-900 px-4 py-2.5 text-base font-bold text-white active:bg-neutral-700"
+        >
+          Ir a la caja
+        </Link>
+      </div>
+    );
+  }
+  return (
+    <p className="flex flex-wrap items-center gap-x-2 text-sm text-neutral-500">
+      <span aria-hidden="true" className="h-2 w-2 rounded-full bg-green-500" />
+      Caja abierta · jornada {formatearJornada(abierta)} ·
+      <Link href="/app/caja" className="font-semibold text-neutral-700 underline">
+        Ver caja
+      </Link>
+    </p>
   );
 }

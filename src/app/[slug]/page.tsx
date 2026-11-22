@@ -20,19 +20,24 @@ import { Landing, type CategoriaLanding } from "./landing";
  * `cache` para que generateMetadata y la página hagan una sola consulta.
  * `connection()`: el cliente público no lee cookies, así que sin esto Next
  * podría prerenderizar la carta y servirla vieja.
+ *
+ * `leidaEn`: cuándo se leyó (reloj del servidor). La landing lo compara
+ * con el estado del local que va consultando después
+ * (vigilar-estado-local.tsx), para no pisar esta carta con uno más viejo.
  */
 const obtenerCarta = cache(async (slug: string) => {
   await connection();
   if (validarSlug(slug) !== null) return null;
 
   const supabase = crearClientePublico();
+  const leidaEn = Date.now();
   const { data, error } = await supabase.rpc("carta_publica", {
     p_slug: slug,
   });
   // Un error de base no es "no existe": va al error boundary (con
   // "Reintentar"), no a la página de local no disponible.
   if (error) throw new Error(`carta_publica: ${error.message}`);
-  return data;
+  return data ? { ...data, leidaEn } : null;
 });
 
 export const viewport: Viewport = { themeColor: "#ffffff" };
@@ -139,6 +144,8 @@ export default async function PaginaLanding({
     <Landing
       slug={slug}
       comercio={{ nombre: comercio.nombre, whatsapp: comercio.whatsapp }}
+      tomandoPedidos={comercio.tomando_pedidos}
+      leidaEn={carta.leidaEn}
       categorias={categorias}
     />
   );

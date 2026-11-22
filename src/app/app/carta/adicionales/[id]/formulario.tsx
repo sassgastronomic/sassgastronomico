@@ -30,7 +30,7 @@ const ESTADO_INICIAL: EstadoEditarAdicional = {};
 
 const ESTILO_LABEL = "mb-1 block text-sm font-medium text-neutral-700";
 const ESTILO_INPUT_BASE =
-  "w-full rounded-md border px-3 py-2 text-sm outline-none focus:ring-1";
+  "w-full rounded-md border px-3 py-2 text-base outline-none focus:ring-1 sm:text-sm";
 
 function claseInput(conError: boolean): string {
   return conError

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
@@ -94,13 +95,17 @@ export function PantallaSector({
   comercioId,
   sectorId,
   pedidos,
+  solapaInicial,
 }: {
   comercioId: string;
   sectorId: string;
   pedidos: PedidoConItems[];
+  // Para volver desde la solapa de disponibilidad (otra página) a la que
+  // corresponde (?solapa=listos).
+  solapaInicial: "en_cocina" | "listos";
 }) {
   const router = useRouter();
-  const [solapa, setSolapa] = useState<"en_cocina" | "listos">("en_cocina");
+  const [solapa, setSolapa] = useState<"en_cocina" | "listos">(solapaInicial);
   const [avisoNuevo, setAvisoNuevo] = useState(false);
   const [conectado, setConectado] = useState(true);
   const [wakeLockActivo, setWakeLockActivo] = useState(true);
@@ -251,7 +256,7 @@ export function PantallaSector({
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={() => setSolapa("en_cocina")}
@@ -274,6 +279,14 @@ export function PantallaSector({
           >
             Listos
           </button>
+          {/* Otra página (carga la carta solo cuando se la mira), con el
+              mismo aspecto de solapa. */}
+          <Link
+            href={`/app/sector/${sectorId}/disponibilidad`}
+            className="rounded-full border-2 border-neutral-300 bg-white px-6 py-3 text-lg font-bold text-neutral-700 active:bg-neutral-100"
+          >
+            Disponibilidad
+          </Link>
         </div>
 
         {wakeLockSoportado && (
@@ -309,7 +322,7 @@ export function PantallaSector({
                 }`}
               >
                 <div className="flex items-start justify-between gap-3">
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-5xl font-black text-neutral-900">
                       #{pedido.numero ?? "—"}
                     </p>

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { obtenerCajaAbierta } from "@/lib/caja/caja";
 import { obtenerContextoComercio } from "@/lib/comercio/contexto";
 import { planPermiteSalon } from "@/lib/mesas/validacion";
 import { crearClienteServidor } from "@/lib/supabase/server";
@@ -129,9 +130,16 @@ export default async function PaginaSalon({
   const parametros = await searchParams;
   const codigoError =
     typeof parametros.error === "string" ? parametros.error : undefined;
-  const mensajeError = codigoError ? MENSAJE_ERROR[codigoError] : undefined;
 
   const zonas = await obtenerZonasConMesas(contexto.comercio.id);
+  const cajaAbierta = (await obtenerCajaAbierta(contexto.comercio.id)) !== null;
+
+  // "caja_cerrada" no se muestra como error: si sigue cerrada ya está el
+  // aviso fijo de abajo, y si la abrieron mientras tanto, quedó viejo.
+  const mensajeError =
+    codigoError && codigoError !== "caja_cerrada"
+      ? MENSAJE_ERROR[codigoError]
+      : undefined;
 
   // Lo primero que mira el mozo al entrar: qué tiene para llevar. Va
   // arriba de las zonas (que pueden estar plegadas) para que nunca quede
@@ -170,6 +178,19 @@ export default async function PaginaSalon({
         </section>
       )}
 
+      {/* Sin caja no se abren mesas ni se cargan rondas (la base lo
+          rechaza). El mozo no puede abrirla: se lo pide al mostrador. Se
+          actualiza solo cuando la abren (ActualizarEnVivo escucha cajas). */}
+      {!cajaAbierta && (
+        <p
+          role="alert"
+          className="rounded-2xl border-2 border-amber-300 bg-amber-50 px-4 py-4 text-base text-amber-950"
+        >
+          <strong className="font-bold">La caja no está abierta.</strong>{" "}
+          Pedile al mostrador que la abra para empezar a atender mesas.
+        </p>
+      )}
+
       {mensajeError && (
         <p
           role="alert"
@@ -189,6 +210,7 @@ export default async function PaginaSalon({
 
       {zonas.length > 0 && (
         <ListadoSalon
+          cajaAbierta={cajaAbierta}
           zonas={zonas}
           comercioId={contexto.comercio.id}
           usuarioId={contexto.usuario.id}

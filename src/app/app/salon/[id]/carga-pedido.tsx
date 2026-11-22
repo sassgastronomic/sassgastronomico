@@ -71,7 +71,7 @@ function FilaProducto({
       onClick={() => onSeleccionar(producto)}
       className="flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left active:bg-neutral-50"
     >
-      <span className="text-base font-medium text-neutral-900">
+      <span className="min-w-0 text-base font-medium text-neutral-900">
         {producto.nombre}
       </span>
       <span className="shrink-0 text-base font-semibold text-neutral-600">
@@ -142,6 +142,8 @@ export function CargaPedido({
     useState<ProductoPicker | null>(null);
   const [cantidadEdicion, setCantidadEdicion] = useState(1);
   const [notaEdicion, setNotaEdicion] = useState("");
+  // La aclaración arranca escondida: ver el bloque que la dibuja.
+  const [notaAbierta, setNotaAbierta] = useState(false);
   const [adicionalesEdicion, setAdicionalesEdicion] = useState<Set<string>>(
     new Set(),
   );
@@ -226,10 +228,13 @@ export function CargaPedido({
             .reduce((suma, a) => suma + a.precioExtra, 0)) *
         cantidadEdicion;
 
-  function abrirEdicion(producto: ProductoPicker) {
+  // "nota" es para cuando se reabre un ítem que ya está en el carrito: lo
+  // que ya tenga escrito manda, y el campo se muestra abierto.
+  function abrirEdicion(producto: ProductoPicker, nota = "") {
     setProductoEnEdicion(producto);
     setCantidadEdicion(1);
-    setNotaEdicion("");
+    setNotaEdicion(nota);
+    setNotaAbierta(nota.length > 0);
     setAdicionalesEdicion(new Set());
   }
 
@@ -551,22 +556,46 @@ export function CargaPedido({
               </div>
             )}
 
+            {/* Escondida detrás de un botón: en la mayoría de los
+                productos no hace falta ninguna, y un campo abierto invita a
+                escribir cualquier cosa (una gaseosa no lleva aclaración).
+                Sigue siendo opcional y se guarda igual. Una vez abierta no se
+                vuelve a cerrar: si se cerrara con algo escrito, se mandaría a
+                la cocina una nota que el mozo ya no ve. */}
             <div>
-              <label
-                htmlFor="nota-producto"
-                className="mb-2 block text-base font-semibold text-neutral-900"
-              >
-                Nota (opcional)
-              </label>
-              <input
-                id="nota-producto"
-                type="text"
-                maxLength={140}
-                value={notaEdicion}
-                onChange={(evento) => setNotaEdicion(evento.target.value)}
-                placeholder='Ej: "sin sal", "bien cocida"'
-                className="w-full rounded-xl border-2 border-neutral-200 px-4 py-3 text-base outline-none focus:border-neutral-900"
-              />
+              {notaAbierta ? (
+                <>
+                  <label
+                    htmlFor="nota-producto"
+                    className="mb-2 block text-base font-semibold text-neutral-900"
+                  >
+                    Nota (opcional)
+                  </label>
+                  <input
+                    id="nota-producto"
+                    type="text"
+                    // Recién montado, así que el foco y el teclado salen
+                    // solos: lo acaban de tocar para escribir.
+                    autoFocus
+                    maxLength={140}
+                    value={notaEdicion}
+                    onChange={(evento) => setNotaEdicion(evento.target.value)}
+                    placeholder='Ej: "sin sal", "bien cocida"'
+                    className="w-full rounded-xl border-2 border-neutral-200 px-4 py-3 text-base outline-none focus:border-neutral-900"
+                  />
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setNotaAbierta(true)}
+                  className="flex min-h-14 w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-neutral-300 px-4 py-3 text-base font-semibold text-neutral-600 active:bg-neutral-50"
+                >
+                  <span aria-hidden="true" className="text-xl leading-none">
+                    +
+                  </span>
+                  Agregar aclaración
+                </button>
+              )}
             </div>
 
             <div>

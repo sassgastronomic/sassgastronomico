@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { obtenerContextoComercio } from "@/lib/comercio/contexto";
 import { planPermiteTakeAway } from "@/lib/comercios/validacion";
 import { planPermiteSalon } from "@/lib/mesas/validacion";
+import { crearClienteServidor } from "@/lib/supabase/server";
 import type { PlanComercio } from "@/types/database";
 
 const ETIQUETA_PLAN: Record<PlanComercio, string> = {
@@ -34,8 +35,24 @@ export default async function PaginaApp() {
   if (rol === "mozo" && planPermiteSalon(comercio.plan)) {
     redirect("/app/salon");
   }
-  if (rol === "mostrador" && planPermiteTakeAway(comercio.plan)) {
-    redirect("/app/pedidos");
+  // El mostrador: lo primero al llegar es la caja. Si no está abierta la
+  // de hoy (o quedó abierta la de una jornada anterior), va ahí; si ya
+  // está, a los pedidos online (o a la caja igual, en un plan sin take
+  // away). /app/caja y /app/pedidos no rebotan a /app con estas
+  // condiciones, así que no hay bucle.
+  if (rol === "mostrador") {
+    const supabase = await crearClienteServidor();
+    const { data: situacion } = await supabase.rpc("situacion_caja", {
+      p_comercio_id: comercio.id,
+    });
+    const cajaDeHoy =
+      !!situacion?.abierta &&
+      situacion.abierta.jornada === situacion.jornada_actual;
+    redirect(
+      cajaDeHoy && planPermiteTakeAway(comercio.plan)
+        ? "/app/pedidos"
+        : "/app/caja",
+    );
   }
   if (rol === "sector" && sectoresAsignados.length === 1) {
     redirect(`/app/sector/${sectoresAsignados[0].id}`);

@@ -50,6 +50,7 @@ import {
   IconoReloj,
 } from "./iconos";
 import { PantallaEnviado, type EstadoWhatsapp } from "./pantalla-enviado";
+import { VigilarEstadoLocal } from "./vigilar-estado-local";
 
 export type AdicionalLanding = {
   id: string;
@@ -160,6 +161,12 @@ function seAbreEnPestanaNueva(): boolean {
   return !window.matchMedia("(pointer: coarse)").matches;
 }
 
+function mismosIds(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const id of a) if (!b.has(id)) return false;
+  return true;
+}
+
 function numeroDePedido(texto: string | null): number | null {
   if (!texto) return null;
   const numero = Number(texto);
@@ -188,10 +195,19 @@ export function Landing({
   slug,
   comercio,
   categorias,
+  tomandoPedidos,
+  leidaEn,
 }: {
   slug: string;
   comercio: { nombre: string; whatsapp: string };
   categorias: CategoriaLanding[];
+  // Con la caja del local cerrada: se ve la carta (para los precios), pero
+  // no se puede pedir. crear_pedido_landing lo rechaza igual. Se mantiene
+  // al día solo, sin recargar (VigilarEstadoLocal).
+  tomandoPedidos: boolean;
+  // Cuándo se leyó esta carta de la base (reloj del servidor): para no
+  // pisarla con un estado del local más viejo (VigilarEstadoLocal).
+  leidaEn: number;
 }) {
   const searchParams = useSearchParams();
 
@@ -238,19 +254,44 @@ export function Landing({
   } | null>(null);
   const idsApagados =
     apagados && apagados.carta === categorias ? apagados.ids : null;
+
+  // Lo que está sin stock según el estado del local que la landing va
+  // consultando (VigilarEstadoLocal), más nuevo que esta carta: lo que la
+  // cocina o el mostrador marcan mientras el cliente mira. Vale para esta
+  // carta; si la página trae una nueva, ya viene al día.
+  const [stockAlDia, setStockAlDia] = useState<{
+    carta: CategoriaLanding[];
+    sinStock: ReadonlySet<string>;
+  } | null>(null);
+  const sinStockAlDia =
+    stockAlDia && stockAlDia.carta === categorias ? stockAlDia.sinStock : null;
+
+  function alSaberStock(sinStock: ReadonlySet<string>) {
+    setStockAlDia((actual) =>
+      actual && actual.carta === categorias && mismosIds(actual.sinStock, sinStock)
+        ? actual
+        : { carta: categorias, sinStock },
+    );
+  }
+
   const categoriasVistas = useMemo(
     () =>
-      idsApagados
+      idsApagados || sinStockAlDia
         ? categorias.map((categoria) => ({
             ...categoria,
-            productos: categoria.productos.map((producto) =>
-              idsApagados.has(producto.id)
-                ? { ...producto, sinStock: true }
-                : producto,
-            ),
+            productos: categoria.productos.map((producto) => {
+              const sinStock =
+                (idsApagados?.has(producto.id) ?? false) ||
+                (sinStockAlDia
+                  ? sinStockAlDia.has(producto.id)
+                  : producto.sinStock);
+              return sinStock === producto.sinStock
+                ? producto
+                : { ...producto, sinStock };
+            }),
           }))
         : categorias,
-    [categorias, idsApagados],
+    [categorias, idsApagados, sinStockAlDia],
   );
 
   function marcarNoDisponibles(ids: string[]) {
@@ -332,13 +373,19 @@ export function Landing({
 
   // --- Vistas ----------------------------------------------------------
 
-  const productoAbiertoId = searchParams.get(PARAM_PRODUCTO);
+  // Sin tomar pedidos no se abre ninguna hoja de pedir (aunque la URL las
+  // traiga): solo la pantalla de "pedido enviado", para quien vuelve.
+  const productoAbiertoId = tomandoPedidos
+    ? searchParams.get(PARAM_PRODUCTO)
+    : null;
   const productoAbierto = productoAbiertoId
     ? (productosPorId.get(productoAbiertoId) ?? null)
     : null;
   const ver = searchParams.get(PARAM_VER);
   const pedidoAbierto =
-    !productoAbierto && (ver === "pedido" || ver === "confirmar");
+    tomandoPedidos &&
+    !productoAbierto &&
+    (ver === "pedido" || ver === "confirmar");
   const confirmando = pedidoAbierto && ver === "confirmar";
   const numeroEnviado = numeroDePedido(searchParams.get(PARAM_ENVIADO));
   const enviadoAbierto =
@@ -415,6 +462,23 @@ export function Landing({
     setAviso(texto);
     refTimerAviso.current = setTimeout(() => setAviso(null), 2600);
   }
+
+  // Si el local abre mientras el cliente mira la carta, la página se
+  // habilita sola (VigilarEstadoLocal): se le avisa, para que entienda
+  // por qué cambió.
+  const [tomabaPedidos, setTomabaPedidos] = useState(tomandoPedidos);
+  const [recienAbrio, setRecienAbrio] = useState(false);
+  if (tomabaPedidos !== tomandoPedidos) {
+    setTomabaPedidos(tomandoPedidos);
+    setRecienAbrio(tomandoPedidos);
+  }
+  useEffect(() => {
+    if (!recienAbrio) return;
+    const temporizador = setTimeout(() => setRecienAbrio(false), 4000);
+    return () => clearTimeout(temporizador);
+  }, [recienAbrio]);
+  const textoAviso =
+    aviso ?? (recienAbrio ? "¡Ya estamos tomando pedidos!" : null);
 
   // --- Carrito ---------------------------------------------------------
 
@@ -674,8 +738,22 @@ export function Landing({
             {comercio.nombre}
           </h1>
           <p className="mt-2 text-base text-pretty text-neutral-600">
-            Elegí lo que quieras y hacé tu pedido para retirar o con envío.
+            {tomandoPedidos
+              ? "Elegí lo que quieras y hacé tu pedido para retirar o con envío."
+              : "Mirá la carta y los precios."}
           </p>
+
+          {!tomandoPedidos && (
+            <p
+              role="status"
+              className="mt-5 rounded-2xl bg-amber-50 px-4 py-3.5 text-base text-pretty text-amber-950 ring-1 ring-amber-200"
+            >
+              <strong className="font-semibold">
+                Ahora no estamos tomando pedidos.
+              </strong>{" "}
+              Podés mirar la carta igual; volvé a pasar más tarde para pedir.
+            </p>
+          )}
 
           {pedidoReciente && (
             <AvisoPedidoReciente
@@ -739,6 +817,7 @@ export function Landing({
                   <TarjetaProducto
                     producto={producto}
                     enElPedido={unidadesPorProducto.get(producto.id) ?? 0}
+                    soloVer={!tomandoPedidos}
                     onElegir={() => abrirVista(PARAM_PRODUCTO, producto.id)}
                   />
                 </li>
@@ -761,22 +840,30 @@ export function Landing({
         </footer>
       </main>
 
-      <BarraPedido
-        unidades={unidades}
-        total={total}
-        hayNoDisponibles={lineasNoDisponibles > 0}
-        onAbrir={() => abrirVista(PARAM_VER, "pedido")}
-      />
+      {tomandoPedidos ? (
+        <BarraPedido
+          unidades={unidades}
+          total={total}
+          hayNoDisponibles={lineasNoDisponibles > 0}
+          onAbrir={() => abrirVista(PARAM_VER, "pedido")}
+        />
+      ) : (
+        <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+          <p className="mx-auto max-w-2xl rounded-2xl bg-neutral-800 px-5 py-3.5 text-center text-base font-semibold text-white shadow-lg">
+            Ahora no se están tomando pedidos
+          </p>
+        </div>
+      )}
 
       {/* Lo lee un lector de pantalla; el cartel de abajo es para la vista. */}
       <p aria-live="polite" className="sr-only">
-        {aviso}
+        {textoAviso}
       </p>
-      {aviso && !hojaAbierta && (
+      {textoAviso && !hojaAbierta && (
         <div className="pointer-events-none fixed inset-x-0 bottom-[calc(6rem+env(safe-area-inset-bottom))] z-40 flex justify-center px-4">
           <p className="flex items-center gap-2 rounded-full bg-emerald-700 px-5 py-2.5 text-base font-semibold text-white shadow-lg">
             <IconoListo className="h-5 w-5 shrink-0" />
-            {aviso}
+            {textoAviso}
           </p>
         </div>
       )}
@@ -809,6 +896,14 @@ export function Landing({
           onCerrar={cerrarVistaActual}
         />
       )}
+
+      <VigilarEstadoLocal
+        slug={slug}
+        tomandoPedidos={tomandoPedidos}
+        leidaEn={leidaEn}
+        pausado={hojaAbierta}
+        onSinStock={alSaberStock}
+      />
 
       {enviadoAbierto && numeroEnviado !== null && (
         <PantallaEnviado
@@ -871,10 +966,13 @@ function AvisoPedidoReciente({
 function TarjetaProducto({
   producto,
   enElPedido,
+  soloVer,
   onElegir,
 }: {
   producto: ProductoLanding;
   enElPedido: number;
+  // El local no está tomando pedidos: se muestra, pero no se toca.
+  soloVer: boolean;
   onElegir: () => void;
 }) {
   if (producto.sinStock) {
@@ -896,6 +994,26 @@ function TarjetaProducto({
           </p>
         </div>
         <p className="shrink-0 text-base font-semibold text-neutral-400 tabular-nums">
+          {formatearPrecio(producto.precio)}
+        </p>
+      </div>
+    );
+  }
+
+  if (soloVer) {
+    return (
+      <div className="flex items-start justify-between gap-4 rounded-2xl border border-neutral-200 bg-white p-4">
+        <div className="min-w-0">
+          <p className="text-base font-semibold text-neutral-900">
+            {producto.nombre}
+          </p>
+          {producto.descripcion && (
+            <p className="mt-1 line-clamp-2 text-sm leading-snug text-neutral-500">
+              {producto.descripcion}
+            </p>
+          )}
+        </div>
+        <p className="shrink-0 text-base font-bold text-neutral-900 tabular-nums">
           {formatearPrecio(producto.precio)}
         </p>
       </div>
@@ -1106,6 +1224,9 @@ function HojaProducto({
 }) {
   const [cantidad, setCantidad] = useState(1);
   const [nota, setNota] = useState("");
+  // Abierta de entrada solo si el ítem ya trae una aclaración (al reabrirlo
+  // desde el pedido): si no, escondería algo que ya está escrito.
+  const [notaAbierta, setNotaAbierta] = useState(() => nota.length > 0);
   const [elegidos, setElegidos] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -1212,21 +1333,41 @@ function HojaProducto({
             </fieldset>
           )}
 
-          <div className="mt-8">
-            <label htmlFor="nota-producto" className="text-lg font-bold">
-              ¿Alguna aclaración?
-            </label>
-            <p className="text-sm text-neutral-500">Opcional.</p>
-            <textarea
-              id="nota-producto"
-              rows={2}
-              maxLength={LIMITES_PEDIDO.notaItem}
-              value={nota}
-              onChange={(evento) => setNota(evento.target.value)}
-              placeholder='Ej: "sin sal", "bien cocida"'
-              className="mt-3 w-full resize-none rounded-2xl border-2 border-neutral-200 bg-white px-4 py-3 text-base text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-900"
-            />
-          </div>
+          {/* Escondida detrás de un botón: la mayoría de los productos no
+              la necesita (una gaseosa no lleva aclaración) y un campo abierto
+              invita a escribir cualquier cosa, que después alguien tiene que
+              leer en la cocina. Sigue siendo opcional y se guarda igual. Una
+              vez abierta no se vuelve a cerrar: si se cerrara con algo
+              escrito, se mandaría una aclaración que el cliente ya no ve. */}
+          {notaAbierta ? (
+            <div className="mt-8">
+              <label htmlFor="nota-producto" className="text-lg font-bold">
+                ¿Alguna aclaración?
+              </label>
+              <p className="text-sm text-neutral-500">Opcional.</p>
+              <textarea
+                id="nota-producto"
+                rows={2}
+                // Recién montado, así que el foco y el teclado salen solos:
+                // lo acaban de tocar para escribir.
+                autoFocus
+                maxLength={LIMITES_PEDIDO.notaItem}
+                value={nota}
+                onChange={(evento) => setNota(evento.target.value)}
+                placeholder='Ej: "sin sal", "bien cocida"'
+                className="mt-3 w-full resize-none rounded-2xl border-2 border-neutral-200 bg-white px-4 py-3 text-base text-neutral-900 outline-none placeholder:text-neutral-400 focus:border-neutral-900"
+              />
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setNotaAbierta(true)}
+              className="mt-8 flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-neutral-300 px-4 py-3.5 text-base font-semibold text-neutral-600 active:bg-neutral-50"
+            >
+              <IconoMas className="h-5 w-5" />
+              Agregar aclaración
+            </button>
+          )}
 
           <div className="mt-8 flex items-center justify-between gap-4">
             <p className="text-lg font-bold">Cantidad</p>

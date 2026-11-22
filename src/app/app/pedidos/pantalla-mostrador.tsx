@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 
@@ -103,13 +104,17 @@ const ESTADO_ITEM: Record<EstadoItem, { texto: string; clase: string }> = {
 export function PantallaMostrador({
   comercioId,
   pedidos,
+  pestanaInicial,
 }: {
   comercioId: string;
   pedidos: PedidoMostrador[];
+  // Para volver desde la solapa de disponibilidad (otra página) a la que
+  // corresponde (?pestana=en_cocina).
+  pestanaInicial: EtapaMostrador;
 }) {
   const router = useRouter();
   const [, iniciarTransicion] = useTransition();
-  const [pestana, setPestana] = useState<EtapaMostrador>("nuevo");
+  const [pestana, setPestana] = useState<EtapaMostrador>(pestanaInicial);
   const [conectado, setConectado] = useState(true);
   const [editando, setEditando] = useState<string | null>(null);
   const [aCancelar, setACancelar] = useState<PedidoMostrador | null>(null);
@@ -148,6 +153,17 @@ export function PantallaMostrador({
             event: "*",
             schema: "public",
             table: "pedido_items",
+            filter: `comercio_id=eq.${comercioId}`,
+          },
+          programarRefresco,
+        )
+        // Se abrió o se cerró la caja (el aviso de arriba cambia).
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "cajas",
             filter: `comercio_id=eq.${comercioId}`,
           },
           programarRefresco,
@@ -249,44 +265,54 @@ export function PantallaMostrador({
         )}
       </div>
 
-      <div
-        role="tablist"
-        aria-label="Etapas de los pedidos"
-        className="flex gap-1 overflow-x-auto rounded-2xl bg-neutral-100 p-1.5"
-      >
-        {PESTANAS.map((p) => {
-          const cantidad = pedidos.filter((pedido) => pedido.etapa === p.etapa)
-            .length;
-          const activa = p.etapa === pestana;
-          const urgente = p.etapa === "nuevo" && cantidad > 0;
-          return (
-            <button
-              key={p.etapa}
-              type="button"
-              role="tab"
-              id={`pestana-${p.etapa}`}
-              aria-selected={activa}
-              aria-controls="panel-pedidos"
-              onClick={() => setPestana(p.etapa)}
-              className={`flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-3 text-base font-semibold whitespace-nowrap transition-colors ${
-                activa
-                  ? "bg-white text-neutral-900 shadow-sm"
-                  : "text-neutral-600 hover:bg-white/60"
-              }`}
-            >
-              {p.etiqueta}
-              <span
-                className={`min-w-7 rounded-full px-2 py-0.5 text-sm font-bold tabular-nums ${
-                  urgente
-                    ? "bg-amber-500 text-white"
-                    : "bg-neutral-200 text-neutral-700"
+      <div className="flex gap-1 overflow-x-auto rounded-2xl bg-neutral-100 p-1.5">
+        <div
+          role="tablist"
+          aria-label="Etapas de los pedidos"
+          className="flex flex-3 gap-1"
+        >
+          {PESTANAS.map((p) => {
+            const cantidad = pedidos.filter((pedido) => pedido.etapa === p.etapa)
+              .length;
+            const activa = p.etapa === pestana;
+            const urgente = p.etapa === "nuevo" && cantidad > 0;
+            return (
+              <button
+                key={p.etapa}
+                type="button"
+                role="tab"
+                id={`pestana-${p.etapa}`}
+                aria-selected={activa}
+                aria-controls="panel-pedidos"
+                onClick={() => setPestana(p.etapa)}
+                className={`flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-3 text-base font-semibold whitespace-nowrap transition-colors ${
+                  activa
+                    ? "bg-white text-neutral-900 shadow-sm"
+                    : "text-neutral-600 hover:bg-white/60"
                 }`}
               >
-                {cantidad}
-              </span>
-            </button>
-          );
-        })}
+                {p.etiqueta}
+                <span
+                  className={`min-w-7 rounded-full px-2 py-0.5 text-sm font-bold tabular-nums ${
+                    urgente
+                      ? "bg-amber-500 text-white"
+                      : "bg-neutral-200 text-neutral-700"
+                  }`}
+                >
+                  {cantidad}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        {/* Otra página (carga la carta solo cuando se la mira), con el
+            mismo aspecto de solapa. */}
+        <Link
+          href="/app/pedidos/disponibilidad"
+          className="flex flex-1 items-center justify-center rounded-xl px-4 py-3 text-base font-semibold whitespace-nowrap text-neutral-600 hover:bg-white/60"
+        >
+          Disponibilidad
+        </Link>
       </div>
 
       <div

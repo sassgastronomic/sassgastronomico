@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 
+import { obtenerCajaAbierta } from "@/lib/caja/caja";
 import { obtenerContextoComercio } from "@/lib/comercio/contexto";
 import { planPermiteSalon } from "@/lib/mesas/validacion";
 import { crearClienteServidor } from "@/lib/supabase/server";
@@ -31,6 +32,12 @@ export async function abrirCuenta(
   }
   if (!planPermiteSalon(contexto.comercio.plan)) {
     redirect("/app");
+  }
+
+  // Sin caja abierta el local no opera: no se abren mesas. La base lo
+  // rechaza igual (trigger cuentas_exigen_caja); esto es para avisar claro.
+  if (!(await obtenerCajaAbierta(contexto.comercio.id))) {
+    redirect("/app/salon?error=caja_cerrada");
   }
 
   const supabase = await crearClienteServidor();
@@ -63,6 +70,10 @@ export async function abrirCuenta(
     // No es un bug, es la regla de negocio haciendo su trabajo.
     if (error.code === "23505") {
       redirect("/app/salon?error=mesa_ocupada");
+    }
+    // La caja se cerró justo entre el chequeo de arriba y este insert.
+    if (error.code === "P0001") {
+      redirect("/app/salon?error=caja_cerrada");
     }
     redirect("/app/salon?error=no_se_pudo_abrir");
   }

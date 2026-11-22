@@ -106,8 +106,10 @@ async function obtenerItemsDeSector(
  */
 export default async function PaginaSector({
   params,
+  searchParams,
 }: PageProps<"/app/sector/[id]">) {
   const { id } = await params;
+  const { solapa } = await searchParams;
 
   const contexto = await obtenerContextoComercio();
   if (contexto.tipo !== "activo") {
@@ -156,6 +158,7 @@ export default async function PaginaSector({
         comercioId={contexto.comercio.id}
         sectorId={sector.id}
         pedidos={pedidos}
+        solapaInicial={solapa === "listos" ? "listos" : "en_cocina"}
       />
     </div>
   );

@@ -22,7 +22,9 @@ Si algo de lo que describe este documento cambia (una carpeta se reorganiza, un 
 src/
 ├── proxy.ts                    # "Middleware" (Next 16 lo renombró). Corre en casi toda
 │                                # request. Único trabajo: refrescar la sesión y redirigir
-│                                # a /login si falta en una ruta protegida.
+│                                # a /login si falta en una ruta protegida. No corre en
+│                                # /api/landing/… (respuestas públicas cacheadas en el CDN:
+│                                # nunca tienen que llevar una cookie).
 │
 ├── app/                        # Next.js App Router: cada carpeta = un segmento de URL
 │   ├── page.tsx                # "/": sin pantalla propia, solo redirige según quién sos
@@ -41,8 +43,14 @@ src/
 │   │   ├── pantalla-enviado.tsx # Después de enviar: "el local te va a mandar un link".
 │   │   ├── almacen-local.ts    # Carrito, últimos pedidos y datos del cliente en
 │   │   │                       # localStorage (comodidades, no datos que importen).
+│   │   ├── vigilar-estado-local.tsx # Mantiene la landing al día sola: caja abierta o
+│   │   │                       # cerrada, y lo que se quedó sin stock (/api/landing/…).
 │   │   └── pedido/[codigo]/    # Seguimiento por código (se refresca solo). El link se lo
 │   │                           # manda el local al cliente por WhatsApp.
+│   │
+│   ├── api/landing/[slug]/estado/ # GET público → { tomandoPedidos, sinStock, leidoEn }:
+│   │                           # si el local tiene la caja abierta y qué está sin stock.
+│   │                           # Cacheado 30 s en el CDN.
 │   │
 │   ├── (auth)/login/           # Route group: el "(auth)" no aparece en la URL → es /login.
 │   │   ├── page.tsx            # Form (Client Component) con useActionState.
@@ -60,6 +68,10 @@ src/
 │       ├── menu.tsx             # Navegación lateral (Client Component, sabe qué link
 │       │                       # está activo con usePathname).
 │       ├── page.tsx             # Home de /app.
+│       ├── caja/                # Abrir y cerrar la caja (dueño y mostrador, cualquier plan).
+│       │                        # Sin caja abierta el local no opera. Antes de cerrar muestra
+│       │                        # el resumen interno de la jornada y lo que falta (mesas
+│       │                        # abiertas, pedidos sin entregar).
 │       ├── carta/               # ABM sectores → categorías → productos (+ adicionales)
 │       │                       # y la vista previa de lo que ve el cliente.
 │       ├── usuarios/            # ABM del personal del comercio (solo rol duenio).
@@ -73,10 +85,19 @@ src/
 │       │                        # pedidos online en pestañas Nuevos / En cocina / Listos.
 │       │                        # Aceptar, rechazar/cancelar, editar antes de aceptar y
 │       │                        # entregar, cada uno por su función de la base.
+│       │   └── disponibilidad/  # 4.ª solapa: sin stock / disponible, todos los sectores.
 │       └── sector/[id]/         # Cocina/barra: ítems de pedidos confirmados del sector, en
-│                                # vivo (escucha ítems del sector y pedidos del comercio).
+│           │                    # vivo (escucha ítems del sector y pedidos del comercio).
+│           └── disponibilidad/  # 3.ª solapa: sin stock / disponible, productos del sector.
+│
+├── components/disponibilidad/  # Lo único compartido entre rutas: la lista de interruptores
+│                                # de "sin stock" y su tiempo real, que usan la solapa de
+│                                # cada sector y la del mostrador.
 │
 ├── lib/
+│   ├── caja/caja.ts             # obtenerCajaAbierta() y formatearJornada().
+│   ├── disponibilidad/          # obtenerDisponibilidad() (carta_publica agrupada por sector
+│   │                            # efectivo) y cambiarDisponibilidad() (Server Action).
 │   ├── comercio/contexto.ts     # obtenerContextoComercio(): quién sos, en qué comercio,
 │   │                            # con qué rol. La usan todas las páginas y Server Actions
 │   │                            # de /app — es la pieza más importante del proyecto.
@@ -99,6 +120,8 @@ src/
 │   ├── landing/                  # Reglas del pedido online compartidas por la pantalla y la
 │   │                             # Server Action: validación (mismos límites que la base),
 │   │                             # precios, etapas del seguimiento y mensaje de WhatsApp.
+│   │                             # estado.ts: el contrato del endpoint que la landing
+│   │                             # consulta para saber si el local abrió y qué se acabó.
 │   └── <dominio>/validacion.ts   # Un paquete por dominio: comercios/, sectores/,
 │                                 # categorias/, productos/, adicionales/, usuarios/.
 │       miembros/plan.ts          # Caso especial: no es "validación de formulario", son
@@ -115,8 +138,8 @@ src/
 │                                 # actualizarlo en el mismo cambio (nada avisa si queda
 │                                 # desactualizado — ver "Guía de diagnóstico").
 │
-└── (sin carpeta components/ ni hooks/ — no existen todavía; cada ruta trae su propio
-    formulario.tsx si lo necesita, no hay componentes compartidos entre rutas)
+└── (sin carpeta hooks/; components/ tiene solo lo que de verdad usan dos rutas — hoy,
+    la disponibilidad. Cada ruta sigue trayendo su propio formulario.tsx)
 ```
 
 ### Convención de nombres
@@ -196,13 +219,13 @@ RLS es el motivo por el que esto es defendible incluso si alguien se olvida de e
 `/{slug}` (la landing) y `/{slug}/pedido/{codigo}` (el seguimiento) son las únicas pantallas que usa alguien sin cuenta. Reglas propias:
 
 - **Siempre como `anon`.** Usan `crearClientePublico()` (`src/lib/supabase/publico.ts`), que no lee cookies: aunque el dueño abra su landing logueado, la base ve lo mismo que ve un cliente. Por no leer cookies, Next no se entera de que la página depende del request: las dos llaman a `connection()`.
-- **Lo único que `anon` puede hacer son tres funciones**: `carta_publica`, `crear_pedido_landing` y `seguimiento_pedido`. Ninguna tabla le deja leer nada: las policies llaman a `es_miembro`/`tiene_rol`, que `anon` ni siquiera puede ejecutar, así que un `select` directo con la clave anónima da *permission denied*, no filas.
+- **Lo único que `anon` puede hacer son cuatro funciones**: `carta_publica`, `crear_pedido_landing`, `seguimiento_pedido` y `estado_landing`. Ninguna tabla le deja leer nada: las policies llaman a `es_miembro`/`tiene_rol`, que `anon` ni siquiera puede ejecutar, así que un `select` directo con la clave anónima da *permission denied*, no filas.
 - **La clave anónima es pública** (está en el JavaScript del navegador): cualquiera puede llamar a esas funciones directo, sin pasar por la pantalla ni por la Server Action. Por eso lo que valida `enviarPedido()` (`src/app/[slug]/actions.ts`) se repite adentro de `crear_pedido_landing` con los mismos límites (`src/lib/landing/validacion.ts`), y los precios salen siempre de la base.
-- **Sin Realtime.** El seguimiento se actualiza consultando cada 10 segundos con la pantalla a la vista (`actualizar-seguimiento.tsx`): un anónimo no recibe eventos de `pedidos` por RLS, abrírselos sería exponer pedidos ajenos, y cada pantalla abierta gastaría una de las conexiones de Realtime contadas para las pantallas del local.
+- **Sin Realtime.** El seguimiento se actualiza consultando cada 10 segundos con la pantalla a la vista (`actualizar-seguimiento.tsx`): un anónimo no recibe eventos de `pedidos` por RLS, abrírselos sería exponer pedidos ajenos, y cada pantalla abierta gastaría una de las conexiones de Realtime contadas para las pantallas del local. La landing, para saber si el local abrió o cerró la caja y qué se quedó sin stock, consulta `/api/landing/{slug}/estado` (`vigilar-estado-local.tsx`): una respuesta igual para todos, que el CDN guarda 30 segundos, así que la base recibe a lo sumo una consulta por local cada 30 segundos, miren cuantos miren. Pregunta cada minuto y al volver a la pantalla (con el local cerrado, también al entrar). La respuesta trae cuándo se leyó y la landing descarta la que sea más vieja que su carta (las dos horas son del servidor). Si cambió la caja, recarga la página; el stock lo aplica sin recargar.
 - **Sin `notFound()`.** Si el local no existe o el link de seguimiento no sirve, la página devuelve el aviso armado (`aviso-publico.tsx`) con `robots: noindex`. Con `notFound()`, Next manda un HTML vacío y el aviso lo dibuja recién el JavaScript: en un celular lento, pantalla en blanco.
 - **El contacto es WhatsApp, no un teléfono.** La landing no pide teléfono: al confirmar se crea el pedido y se abre `wa.me` con el chat del local y el pedido escrito (lo arma la Server Action con lo que guardó la base). Sin `comercios.whatsapp`, el local no toma pedidos online. El link de seguimiento se le muestra al cliente apenas confirma (pantalla de "pedido enviado") y va también en su mensaje, así le queda en el chat; el mostrador lo tiene para reenviárselo.
 - **Abrir WhatsApp solo puede fallar.** Un navegador puede no dejar abrir otra app si no viene directo de un toque, y entre el toque en "Confirmar" y la respuesta del servidor pasa un instante. En el celular se intenta primero directo a la app (`whatsapp://send`, sin la página intermedia de wa.me), en la misma pestaña (la página queda como estaba); si la app no está instalada no pasa nada, y al tope de espera aparece el aviso de "no se abrió" con el botón manual, que ahí ya usa wa.me. En la compu, siempre wa.me en una pestaña nueva. Mientras tanto, la pantalla de "pedido enviado" queda tapada por una capa semitransparente "Abriendo WhatsApp…" (sin ella se veía un instante la pantalla antes de que WhatsApp se llevara el foco). La capa se va cuando el cliente vuelve a la pestaña; si a los 4 segundos la página nunca dejó de estar a la vista, se va igual y la pantalla avisa que no se abrió, con el botón "Ir al chat del local" para abrirlo a mano, ya con un toque de verdad. Si abrir falla de entrada, no hay capa: va directo a ese aviso.
-- **El "atrás" del celular cierra las vistas.** La hoja de producto, la del pedido, la confirmación y la pantalla de "pedido enviado" están en la URL (`?producto=…`, `?ver=pedido`, `?ver=confirmar`, `?enviado=N`) con `history.pushState`, que Next integra con `useSearchParams`. Cada entrada guarda en `history.state` cuántas vistas propias hay hasta la carta (Next lo conserva al ir y volver; un `router.refresh()` lo borra, por eso la landing no recarga y vuelve atrás a la vez). Sin eso, "atrás" sacaba al cliente de la página.
+- **El "atrás" del celular cierra las vistas.** La hoja de producto, la del pedido, la confirmación y la pantalla de "pedido enviado" están en la URL (`?producto=…`, `?ver=pedido`, `?ver=confirmar`, `?enviado=N`) con `history.pushState`, que Next integra con `useSearchParams`. Cada entrada guarda en `history.state` cuántas vistas propias hay hasta la carta (Next lo conserva al ir y volver; un `router.refresh()` lo borra, por eso la landing no recarga y vuelve atrás a la vez, ni se recarga sola con una vista abierta). Sin eso, "atrás" sacaba al cliente de la página.
 - **Slugs reservados**: `admin`, `app`, `login` y `api` no se pueden usar como slug de un comercio (`validarSlug`): su landing quedaría tapada por esas rutas.
 
 ---
@@ -275,9 +298,9 @@ flowchart LR
 - **Admin del producto** (`perfiles.es_admin = true`): no pertenece a ningún comercio. Crea comercios y su dueño desde `/admin/comercios/nuevo` (`src/app/admin/comercios/nuevo/actions.ts`). El dueño se crea con **email real** y contraseña que el admin define.
 - **Dueño** (`miembros.rol = 'duenio'`): uno por comercio (índice único parcial en la base). Entra con **email real** — es el titular del servicio, tiene que poder recuperar el acceso por su cuenta. Ve y hace todo en su comercio: carta completa, usuarios, el ABM de mesas (si el plan incluye salón), y a futuro pedidos. Crea a su personal desde `/app/usuarios/nuevo`.
 - **Personal** (`mostrador`, `mozo`, `sector`): no tiene email real. Entra con **nombre de usuario** (`perfiles.usuario`, único en todo el sistema — ver `docs/SCHEMA.md`, "Identificación del personal"). Por atrás se le arma un email interno (`usuario@usuarios.local`, `src/lib/usuarios/email-interno.ts`) solo porque Supabase Auth exige un email; ese email nunca se muestra en ninguna pantalla.
-  - `mostrador`: los pedidos de la landing (`/app/pedidos`): los acepta o rechaza, los edita antes de aceptarlos, los entrega y los puede cancelar. Al loguearse cae directo ahí (si el plan tiene take away).
-  - `mozo`: rondas y cuentas de mesa (a futuro — el ABM de mesas en sí ya está, pero abrir/cerrar una cuenta y cargar pedidos todavía no; requiere plan `salon` o `completo`, si no el rol ni se ofrece al crear).
-  - `sector`: por diseño de base ve y actualiza los ítems de los sectores que tiene asignados en `miembro_sectores` (la policy `items_sector` ya existe y ya lo permite) — no todos los sectores del comercio, solo los suyos. La pantalla (`/app/sector/[id]/page.tsx`) hoy es un placeholder: valida la autorización real y muestra el nombre del sector, pero todavía no lista ítems ni permite cambiarles el estado.
+  - `mostrador`: abre y cierra la caja (`/app/caja`), atiende los pedidos de la landing (`/app/pedidos`): los acepta o rechaza, los edita antes de aceptarlos, los entrega y los puede cancelar; y marca productos sin stock de cualquier sector (`/app/pedidos/disponibilidad`). Al loguearse cae en la caja si la de hoy no está abierta; si ya está, en los pedidos (si el plan tiene take away).
+  - `mozo`: abre y cierra las cuentas de mesa, carga rondas y entrega lo que cocina terminó (`/app/salon`); requiere plan `salon` o `completo`, si no el rol ni se ofrece al crear. No toca la disponibilidad.
+  - `sector`: ve y avanza los ítems de los sectores que tiene asignados en `miembro_sectores` (`/app/sector/[id]`, policy `items_sector`) — no todos los sectores del comercio, solo los suyos — y marca sin stock los productos de esos mismos sectores (`/app/sector/[id]/disponibilidad`, función `cambiar_stock_producto`).
 - Nadie puede asignarse ni asignar el rol `duenio` desde `/app/usuarios` — la lista de roles ofrecidos (`RolAsignable` en `src/lib/usuarios/validacion.ts`) ni siquiera lo incluye, y la policy `miembros_duenio` lo rechaza en la base aunque se lo fuerce.
 - El login (`src/app/(auth)/login/actions.ts`) acepta ambos formatos en el mismo campo: si lo tipeado tiene `@` se usa tal cual como email; si no, se arma el email interno. No hay ambigüedad posible porque el formato de nombre de usuario nunca incluye `@`.
 
@@ -323,7 +346,7 @@ Regla general antes de entrar al detalle: **si una consulta a Supabase no tira e
 | --- | --- | --- |
 | **"No puedo entrar" (login falla)** | 1) ¿El usuario tipeó un nombre de usuario o un email? Si es nombre de usuario, `iniciarSesion()` (`src/app/(auth)/login/actions.ts`) lo traduce a `usuario@usuarios.local` — confirmar que esté bien escrito. 2) Revisar en Supabase Studio → Authentication si existe una cuenta con ese email exacto (real o `@usuarios.local`). 3) El mensaje "Email o contraseña incorrectos" es a propósito genérico (no filtra si el email existe) — no sirve para diferenciar los dos casos, hay que ir directo a Studio. | Que `miembros.activo` sea `false` **no** es la causa: el login solo depende de Auth, no de la membresía. Si loguea bien pero después no ve nada, ese es el siguiente síntoma, no éste. |
 | **"Me rebota a /app" (esperaba /admin u otra sección)** | 1) Si esperaba `/admin`: revisar `perfiles.es_admin` para ese usuario — `admin/layout.tsx` redirige a `/app` si es `false`. 2) Si esperaba una sección de `/app/carta` o `/app/usuarios` y termina en el home de `/app`: esas rutas exigen `contexto.rol === "duenio"` (ver cada `page.tsx`) — revisar `miembros.rol` para esa persona en ese comercio. 3) Si el rebote pasa apenas entra a `/app` (nunca llega a ver el menú): `contexto.tipo` es `"sin_membresia"` o `"suspendido"` (`src/lib/comercio/contexto.ts`) — revisar si tiene una fila `activo = true` en `miembros` para algún comercio, o si `comercios.estado = 'suspendido'`. | Que el link no aparezca en el menú (`menu.tsx`) es un síntoma distinto (ver más abajo) — acá el problema es que la URL puesta a mano igual rebota. |
-| **"No veo un producto en la carta"** | 1) `productos.activo` y, sobre todo, `categorias.activo` de su categoría — un producto activo bajo una categoría inactiva no aparece (mismo filtro que usa `carta_publica`, ver la migración). 2) `productos.sin_stock` no lo saca de la lista, solo lo grisea y bloquea el pedido — si "no lo ve" significa "no lo puede pedir", es esto. 3) Confirmar que se está mirando el comercio correcto: todo en `/app/carta` está scoped por `comercio_id`. 4) Si es el listado interno del dueño (`/app/carta/productos`): revisar el filtro de categoría activo (query param `?categoria=`) en la barra de "pastillas" — puede estar filtrando a otra categoría. | No confundir el listado interno (`/app/carta/productos`, muestra todo, activo o no) con la vista previa (`vista-previa.tsx`, simula lo que ve el cliente) — tienen criterios de visibilidad distintos a propósito. |
+| **"No veo un producto en la carta"** | 1) `productos.activo` y, sobre todo, `categorias.activo` de su categoría — un producto activo bajo una categoría inactiva no aparece (mismo filtro que usa `carta_publica`, ver la migración). 2) `productos.sin_stock` no lo saca de la lista de la landing, solo lo grisea y bloquea el pedido (en la carta del mozo sí desaparece) — si "no lo ve" significa "no lo puede pedir", es esto. Lo marcan la cocina y el mostrador desde "Disponibilidad", y se reactiva todo al cerrar la caja. 3) Confirmar que se está mirando el comercio correcto: todo en `/app/carta` está scoped por `comercio_id`. 4) Si es el listado interno del dueño (`/app/carta/productos`): revisar el filtro de categoría activo (query param `?categoria=`) en la barra de "pastillas" — puede estar filtrando a otra categoría. | No confundir el listado interno (`/app/carta/productos`, muestra todo, activo o no) con la vista previa (`vista-previa.tsx`, simula lo que ve el cliente) — tienen criterios de visibilidad distintos a propósito. |
 | **"Un cambio en la base no se refleja"** | 1) ¿Es un cambio de **dato** (una fila) o de **esquema** (columna/función/policy)? 2) Si es un dato: cada Server Action llama a `revalidatePath(...)` después de escribir — si el cambio se hizo por fuera de una Server Action (por ejemplo, editando la fila a mano en Supabase Studio), Next no se entera hasta que algo dispare esa ruta de nuevo. Un hard refresh del navegador no alcanza: el caché es del lado del servidor (Server Component), no del browser. 3) Si es de esquema: confirmar que la migración realmente se aplicó con `npx supabase db push` — revisar que el archivo esperado esté en `supabase/migrations/` y no haya quedado sin correr. 4) Si se agregó una columna o función nueva en la base: revisar `src/types/database.ts` — es un archivo escrito a mano, nada avisa si queda desactualizado; TypeScript no se queja porque el tipo simplemente no incluye el campo nuevo. | Que el build (`next build`) haya salido bien no confirma que la migración se corrió — son dos sistemas independientes (Next no sabe nada del estado de la base). |
 | **"El menú no muestra una sección"** | 1) `menu.tsx` (`src/app/app/menu.tsx`) solo pinta lo que le pasa `construirSecciones()` en `app/layout.tsx` — revisar esa función: filtra por `rol` y por `plan` (ej. "Mesas" solo si el plan es `salon`/`completo` **y** el rol es `duenio` o `mozo`). 2) Si es una sección de sector (`/app/sector/[id]`): revisar `miembro_sectores` — un rol `sector` sin sectores asignados no tiene ningún link de sector. 3) Confirmar `miembros.rol` para esa persona en ese comercio. | Que la sección "no esté" en el menú no significa que la ruta esté rota — puede estar perfectamente accesible tipeando la URL a mano y solo faltar el link (revisar el síntoma de arriba, "me rebota", para saber si además está bloqueada). |
 | **"Una pantalla en tiempo real no se actualiza sola"** | 1) Con la pantalla abierta, revisar `realtime.subscription` (consulta en la sección "Trampa conocida: Realtime se suscribe como anónimo"): si figura `anon`, el canal se abrió sin pasar por `suscribirseConSesion()`. 2) Confirmar que la tabla esté en la publicación: `select tablename from pg_publication_tables where pubname = 'supabase_realtime';`. 3) Confirmar que la policy de lectura de esa tabla deja ver las filas al rol que mira la pantalla — Realtime aplica RLS igual que una consulta. | Que el canal diga `SUBSCRIBED` no prueba nada: también lo dice cuando está suscripto como anónimo y no va a recibir ningún evento. |
@@ -337,9 +360,10 @@ Regla general antes de entrar al detalle: **si una consulta a Supabase no tira e
 Repaso hecho con el equipo (2026-09-20): de los puntos que siguen, el cliente de navegador sin usar y las pantallas públicas/de sector son simplemente trabajo que todavía no llegó (no hace falta "arreglarlos"), y el ABM de comercios se deja con su estructura propia a propósito — ya está auditado dos veces y uniformarlo solo por consistencia es tocar código que funciona sin necesidad.
 
 - No hay suite de tests en el proyecto todavía. Verificar cambios corriendo `npx tsc --noEmit`, `npx eslint src --max-warnings=0` y `npx next build`, y probando a mano en el browser.
-- `src/lib/supabase/client.ts` (cliente de navegador) ya está en uso, solo para Realtime y siempre a través de `src/lib/supabase/realtime.ts`. Lo usan la pantalla de cocina (`/app/sector/[id]/pantalla-sector.tsx`, suscripta a los `pedido_items` de su sector y a los `pedidos` del comercio, para enterarse de que el mostrador aceptó o canceló uno), las dos del mozo (`/app/salon/actualizar-en-vivo.tsx`, suscriptas a `pedido_items` y `cuentas`) y la del mostrador (`/app/pedidos/pantalla-mostrador.tsx`, suscripta a `pedidos` y `pedido_items` del comercio).
+- `src/lib/supabase/client.ts` (cliente de navegador) ya está en uso, solo para Realtime y siempre a través de `src/lib/supabase/realtime.ts`. Lo usan la pantalla de cocina (`/app/sector/[id]/pantalla-sector.tsx`, suscripta a los `pedido_items` de su sector y a los `pedidos` del comercio, para enterarse de que el mostrador aceptó o canceló uno), las dos del mozo (`/app/salon/actualizar-en-vivo.tsx`, suscriptas a `pedido_items`, `cuentas` y `cajas`), la del mostrador (`/app/pedidos/pantalla-mostrador.tsx`, suscripta a `pedidos`, `pedido_items` y `cajas` del comercio) la de la caja (`/app/caja/pantalla-caja.tsx`, suscripta a `cajas`, `pedidos` y `cuentas`) y las de disponibilidad (`src/components/disponibilidad/disponibilidad-en-vivo.tsx`, suscriptas a `productos`, `categorias` y `sectores`, y a los pedidos nuevos para avisar).
 - `src/app/layout.tsx` (shell HTML, fuentes) ya tiene `lang="es"`, pero el título por defecto sigue siendo "Create Next App" (las pantallas públicas ponen el suyo). `src/app/globals.css` ya no tiene el modo oscuro de la plantilla: la app es solo clara. `src/app/page.tsx` redirige según quién sos.
 - El circuito interno del salón está completo: abrir una cuenta, cargar rondas, marcar entregado lo que cocina terminó y cerrar la mesa (`/app/salon`), con la cocina viendo y avanzando los ítems en tiempo real (`/app/sector/[id]`).
 - El circuito de take away también está completo: la landing (`/{slug}`) toma pedidos que nacen `pendiente_confirmar`; el mostrador (`/app/pedidos`) los acepta — ahí se convierten en comanda y cocina los ve igual que una ronda de salón —, y los entrega cuando cocina termina. Un solo flujo de cocina, dos puertas de entrada. El QR de mesa todavía no existe.
+- La caja (`/app/caja`) marca la jornada: sin caja abierta no entran pedidos de ningún canal ni se abren mesas (lo impone la base, las pantallas solo lo avisan). El resumen de cierre es gestión interna, no un cierre fiscal.
 - Pendiente a propósito (fuera de esta versión): motivo de rechazo, paso "salió" para envíos, aviso sonoro, auto-cancelación de pedidos olvidados, el rol mostrador en plan salón, y cerrar los permisos generales de `pedidos`/`pedido_items` por acción (hoy la regla "el mozo no acepta" la imponen las funciones y la pantalla, pero la policy de la tabla todavía le deja escribir).
 - `src/app/admin/comercios/nuevo/page.tsx` se deja con su estructura propia (sin `formulario.tsx` separado) a propósito, no por descuido — ver "Convención de nombres" más arriba.

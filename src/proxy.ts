@@ -88,7 +88,10 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Corre en todo menos assets estáticos e imágenes optimizadas.
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    // Corre en todo menos assets estáticos e imágenes optimizadas, y la API
+    // pública cacheada de la landing (/api/landing/…): no usa sesión, y si
+    // el refresco de sesión le agregara una cookie, el CDN no la cachearía
+    // (o, peor, se la serviría a otro).
+    "/((?!_next/static|_next/image|favicon.ico|api/landing/|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

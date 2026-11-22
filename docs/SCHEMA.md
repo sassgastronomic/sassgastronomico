@@ -42,8 +42,8 @@ revoke execute on function nombre_funcion(tipos, de, los, argumentos) from publi
 grant execute on function nombre_funcion(tipos, de, los, argumentos) to authenticated;
 -- + `, anon` en el grant de arriba únicamente si la función es parte de la
 -- API pública (piensa: se llama desde una pantalla sin sesión, como la
--- landing o el QR de mesa — hoy son `carta_publica`, `crear_pedido_landing`
--- y `seguimiento_pedido`).
+-- landing o el QR de mesa — hoy son `carta_publica`, `crear_pedido_landing`,
+-- `seguimiento_pedido` y `estado_landing`).
 ```
 
 - Casi ninguna función necesita `anon`: la mayoría solo las llama la app ya logueada (rol `authenticated`), o las invoca otra función/trigger/policy dentro de una transacción de un usuario logueado.
@@ -82,9 +82,9 @@ grant execute on function nombre_funcion(tipos, de, los, argumentos) to authenti
 | Rol | Qué hace |
 | --- | --- |
 | `duenio` | Todo en su comercio: carta, mesas, usuarios, pedidos |
-| `mostrador` | Confirma/rechaza pedidos de la landing, edita y cancela pedidos, entrega take away |
+| `mostrador` | Confirma/rechaza pedidos de la landing, edita y cancela pedidos, entrega take away, abre y cierra la caja, marca productos sin stock (de todos los sectores) |
 | `mozo` | Abre/cierra mesas, carga rondas, escanea QR, marca ítems entregados |
-| `sector` | Ve la pantalla y cambia el estado de los ítems de los sectores que tiene asignados |
+| `sector` | Ve la pantalla y cambia el estado de los ítems de los sectores que tiene asignados, y marca sin stock los productos de esos sectores |
 
 - Los **admins** (`perfiles.es_admin`) son del equipo del producto, no de un comercio. Ven y gestionan todo desde el panel de administrador.
 - Los admins crean el comercio y el usuario dueño. El dueño crea a su personal.
@@ -151,7 +151,7 @@ erDiagram
 
 **`productos`**: `id`, `comercio_id`, `categoria_id`, `nombre`, `descripcion`, `precio`, `imagen_url`, `sector_id`, `sin_stock`, `activo`, `orden`.
 
-- `sin_stock = true` → se muestra en gris con "Sin stock" y no se puede pedir.
+- `sin_stock = true` → se muestra en gris con "Sin stock" y no se puede pedir (en la carta del mozo directamente no aparece). Lo marcan durante la jornada el dueño, el mostrador y la cocina: ver "Disponibilidad durante la jornada". Al cerrar la caja vuelve todo a estar disponible.
 - `activo = false` → no se muestra (ver "Disponibilidad efectiva" más abajo: no alcanza con este campo solo).
 - `sector_id`: la columna existe y la siguen usando las copias en `pedido_items` (a qué pantalla va cada ítem) y `crear_pedido_landing`, pero **la interfaz de administración del comercio siempre la deja en `null`** al crear o editar un producto. Decisión de negocio: un producto se prepara siempre en el sector de su categoría; si un local necesita que algo salga de otro sector, crea una categoría aparte para eso en vez de pisarle el sector a un producto puntual. Si en algún momento se necesita volver a permitir un sector propio por producto, la columna ya está lista. Mientras tanto, el "sector efectivo" de un producto es siempre `coalesce(productos.sector_id, categorias.sector_id)` — todo el código que decide disponibilidad calcula por ahí, nunca asume que es directamente el de la categoría.
 
@@ -174,6 +174,17 @@ Para el dueño: *"Si apagás un sector, se apaga todo lo que cuelga de él — s
 
 Por qué no hay cascada física acá (a diferencia de zonas → mesas): son tres niveles y potencialmente cientos de productos. Escribir `activo = false` en cascada perdería el estado que el dueño ya configuró a mano en cada uno (un producto ya inactivo por otro motivo quedaría indistinguible de "inactivo por su sector"), y al reactivar no habría forma de saber cuáles reactivar de verdad.
 
+### Disponibilidad durante la jornada (sin stock)
+
+Cuando se acaba algo, quien se entera primero es la cocina. Marcarlo **sin stock** lo saca de la carta enseguida y deja de entrar en pedidos. Es otra cosa que `activo`: `activo = false` es "esto ya no lo vendemos más" y lo maneja solo el dueño, en su ABM; `sin_stock` es "hoy se acabó" y lo puede tocar el personal, sin entrar como dueño.
+
+- **Quién:** dueño y mostrador, cualquier producto del comercio; rol `sector`, solo los productos de los sectores que tiene asignados (`miembro_sectores`), mirando el **sector efectivo** del producto. El mozo no.
+- **Cómo:** con la función `cambiar_stock_producto(producto, sin_stock)` (security definer), que valida el rol adentro y **solo cambia `sin_stock`**: nunca `activo`, precio ni nada más. Si el valor ya era ese, no escribe (no dispara un evento de Realtime de más). La Server Action (`src/lib/disponibilidad/actions.ts`) valida lo mismo antes, para dar un error claro.
+- **Sin policy de UPDATE para el personal:** una policy habilita la fila entera, no una columna. La que tenía el mostrador (`productos_stock`) le dejaba cambiar con una llamada directa a la API el precio o el `activo` de cualquier producto; se sacó en la migración `20261015014838_disponibilidad_desde_cocina_y_mostrador`. El dueño sigue editando directo (`productos_duenio`).
+- **Pantallas:** la solapa "Disponibilidad" de cada sector (`/app/sector/[id]/disponibilidad`: los productos de ese sector) y la del mostrador (`/app/pedidos/disponibilidad`: todos los sectores). Las dos muestran arriba lo que está sin stock ahora, para reactivarlo rápido si reponen. Marcar y listo, sin confirmaciones. La lista es lo que ofrece `carta_publica` (lo inactivo, o con su categoría o su sector apagados, no aparece: marcarlo no cambiaría nada).
+- **A dónde llega:** a la carta del mozo y a las otras pantallas de disponibilidad, al instante (Realtime de `productos`); a la landing, en la consulta del estado del local (ver "Landing pública"): menos de un minuto y medio en el peor caso. Igual, `crear_pedido_landing` y `crear_pedido_mozo` rechazan lo que esté sin stock al momento de pedir.
+- **Al cerrar la caja**, todo lo marcado sin stock vuelve a estar disponible (ver "Caja").
+
 ### Salón y pedidos (sprints 3 a 6)
 
 **`zonas`**: `id`, `comercio_id`, `nombre` ("Salón", "Terraza"), `orden`, `activo`. Desactivar una zona arrastra `activo = false` a todas sus mesas, y reactivarla las vuelve a activar a todas (sin importar si alguna estaba desactivada aparte) — lo hace, en una sola transacción, la función `actualizar_zona_con_mesas`. No se puede desactivar la última zona activa del comercio, ni una zona con una mesa con cuenta abierta. Mientras una mesa hereda "Inactiva" de su zona, no se puede editar individualmente (`/app/mesas/[id]` redirige a `/app/mesas`).
@@ -187,6 +198,17 @@ Por qué no hay cascada física acá (a diferencia de zonas → mesas): son tres
 **`pedido_items`**: `id`, `comercio_id`, `pedido_id`, `producto_id`, `nombre` (copia), `categoria_nombre` (copia: muchos productos se llaman solo por su variante, "Simple", y sin la categoría la cocina no sabe si es un lomito o una hamburguesa), `precio_unitario` (copia), `cantidad`, `nota` ("bien cocida"), `sector_id` (copia: a qué pantalla va), `estado`, `listo_en`, `entregado_en`.
 
 **`pedido_item_adicionales`**: `id`, `comercio_id`, `item_id`, `adicional_id`, `nombre` (copia), `precio_extra` (copia).
+
+### Caja (sprint 5)
+
+**`cajas`** (una jornada de trabajo del local): `id`, `comercio_id`, `jornada` (date), `estado` (`abierta` | `cerrada`), `abierta_por`, `abierta_en`, `cerrada_por`, `cerrada_en`, `resumen` (jsonb: lo que se vendió, guardado al cerrar), `productos_reactivados` (cuántos productos sin stock se volvieron a activar al cerrar). Una sola por comercio y jornada (`unique (comercio_id, jornada)`), y **una sola abierta por comercio**, garantizado por la base (índice único parcial `cajas_una_abierta`). Es gestión interna: el resumen **no es un cierre fiscal ni un comprobante** y no reemplaza el cierre fiscal ni los comprobantes del local — en ningún lado se lo llama "cierre Z" ni "cierre fiscal".
+
+- **La jornada empieza cuando se abre la caja y termina cuando se cierra. Con la caja cerrada, el local no opera**: el trigger de `pedidos` rechaza cualquier pedido (landing, mozo) y el de `cuentas` (`cuentas_exigen_caja`) no deja abrir mesas. La landing muestra la carta, pero no deja pedir (`carta_publica` devuelve `comercio.tomando_pedidos`).
+- Abrir y cerrar: solo dueño o mostrador, con las funciones `abrir_caja` y `cerrar_caja` (validan el rol adentro). `situacion_caja` dice qué jornada corresponde hoy, si hay una caja abierta (y de qué jornada) y si la de hoy ya se cerró.
+- Se abre la caja de la jornada que corresponde según `hora_corte` (ver "Numeración por jornada"). Si quedó abierta la de una jornada anterior, `abrir_caja` no abre otra: primero hay que cerrar esa. Si la de hoy ya se cerró, se puede **reabrir** (es la misma caja; al volver a cerrarla, el resumen se recalcula).
+- No se puede cerrar con mesas abiertas ni con pedidos sin entregar (salvo cancelados) de esa jornada: `cerrar_caja` devuelve qué falta y no cierra. Bloquea la fila de la caja mientras cierra, y los triggers que crean pedidos o abren mesas toman un bloqueo compartido sobre la misma fila: nada entra en una caja a medio cerrar.
+- Al cerrar, todos los productos marcados sin stock vuelven a estar disponibles (al día siguiente se arranca de cero), y se informa cuántos.
+- El resumen (`resumen_caja` antes de cerrar, `cajas.resumen` después) cubre **solo los pedidos de esa jornada** (`pedidos.jornada`): cantidad de pedidos de salón (mesas y rondas) y take away, cancelados aparte, total vendido (sin cancelados) y el detalle por categoría y producto.
 
 ## Estados
 
@@ -218,7 +240,8 @@ stateDiagram-v2
 ## Numeración por jornada
 
 - `numero` arranca en 1 cada **jornada**, no cada día calendario.
-- Jornada = fecha local del comercio restando `hora_corte`. Con corte 06:00, un pedido de las 02:00 del sábado pertenece a la jornada del viernes.
+- La jornada de un pedido es **la de la caja abierta** en ese momento (ver "Caja"). Sin caja abierta no se crea ningún pedido.
+- La jornada de una caja se fija al abrirla: fecha local del comercio restando `hora_corte`. Con corte 06:00, una caja abierta el viernes a las 19:00 es de la jornada del viernes, y un pedido de las 02:00 del sábado sigue siendo de esa jornada mientras esa caja siga abierta (aunque se cierre a las 07:00).
 - Lo asigna un trigger con la tabla `contadores_pedidos` (sin carreras entre inserts simultáneos).
 
 ## Canales
@@ -228,6 +251,9 @@ stateDiagram-v2
 - URL: `/{slug}`. Muestra la carta activa. Pide nombre, modalidad y dirección si es envío. **No pide teléfono**: el contacto con el cliente es WhatsApp, como trabajan hoy estos locales.
 - No tiene opción de mesa.
 - Flujo: el cliente arma el pedido → carga nombre, retiro o envío (y dirección si es envío) → revisa el resumen con el total en una confirmación → al aceptar, se crea el pedido y se le abre WhatsApp con el chat del local y el pedido ya escrito (empieza con el número de pedido en negrita, para que el mostrador lo cruce con su pantalla, y termina con el link de seguimiento, así le queda en su propio chat) → al volver al navegador ve su link de seguimiento, con el aviso de que lo guarde y de que, si lo pierde, se lo pida al local por WhatsApp. El mensaje se arma recién después de crear el pedido: el código ya existe (lo genera el mismo insert), y si no llegara no se arma ningún mensaje.
+- **Con la caja cerrada, la landing no toma pedidos**: muestra la carta (para ver precios) con el aviso "Ahora no estamos tomando pedidos", sin poder armar un pedido. El trigger de `pedidos` lo rechaza igual si alguien llama a `crear_pedido_landing` directo.
+- **La landing se mantiene al día sola**, sin que el cliente recargue: pregunta a `GET /api/landing/{slug}/estado` (función `estado_landing`) si el local está tomando pedidos (lo mismo que `carta_publica` en `tomando_pedidos`) y qué productos están sin stock. Si cambió la caja, vuelve a pedir la página (y al habilitarse avisa "¡Ya estamos tomando pedidos!"); el stock lo aplica sin pedir nada más (lo que la cocina marca sin stock se ve en gris, y si estaba en el pedido del cliente, se lo marca ahí). La respuesta la guarda el CDN 30 segundos: miren cuantos clientes miren, la base recibe a lo sumo una consulta por local cada 30 segundos. La respuesta dice cuándo se leyó, y la landing descarta la que sea más vieja que su carta. Pregunta cada 60 segundos y al volver a la pantalla o recuperar la conexión; con el local cerrado, también al entrar; nunca con la pantalla oculta. Con una vista abierta (un producto, el pedido) no recarga la página, pero el stock sí lo aplica. Peor caso, se entera a los ~90 segundos; al volver a la pantalla, a los 30 como mucho.
+- **No hay horario de atención**: se evaluó mostrar "abre a las…" y se descartó. Lo que dice si el local toma pedidos es la caja.
 - **Sin WhatsApp cargado (`comercios.whatsapp`), el local no toma pedidos online**: no habría cómo contactar al cliente. La landing lo muestra como "no toma pedidos online" y `crear_pedido_landing` lo rechaza.
 - El cliente **no** escribe en tablas directamente: usa la función `crear_pedido_landing` (security definer), que valida plan, estado del comercio, WhatsApp, disponibilidad y precios desde la base (nunca confía en precios del cliente), y también los datos del cliente con los mismos límites que la pantalla (nombre, dirección obligatoria con envío, hasta 50 líneas y 99 unidades por línea; el teléfono es opcional y, si llega, se valida): la función se puede llamar directo con la clave anónima, que es pública. Devuelve el número, el código de seguimiento, hasta cuándo puede servir el link como máximo (`vence_en`) y el detalle guardado (para armar el mensaje).
 - El pedido nace `pendiente_confirmar`. Con retiro no se guarda dirección aunque llegue.
@@ -244,7 +270,7 @@ stateDiagram-v2
 
 ### Mostrador (pedidos de la landing)
 
-- Pantalla `/app/pedidos`, para dueño y mostrador, solo con plan con take away. El mostrador cae directo ahí al loguearse.
+- Pantalla `/app/pedidos`, para dueño y mostrador, solo con plan con take away. Al loguearse, el mostrador cae en la caja (`/app/caja`) si la de hoy no está abierta, y si ya está, directo acá. Arriba de los pedidos se ve el estado de la caja, con un acceso para abrirla si está cerrada.
 - Pestañas: **Nuevos** (pendientes), **En cocina** (aceptados con algo sin terminar) y **Listos para entregar** (aceptados con todo listo). Las rondas de salón no aparecen: tienen su circuito (mozo, cuentas).
 - Cada acción es una función de la base que valida adentro rol (dueño o mostrador; el mozo no), estado y origen (`landing`), y bloquea el pedido mientras trabaja: si dos personas aceptan a la vez, la segunda recibe "Este pedido ya fue aceptado".
   - `aceptar_pedido_landing`: pendiente → `confirmado`, con `confirmado_en`. Desde ese momento es una comanda más: cocina lo ve (sus ítems ya tienen sector desde que se crearon), con nombre del cliente, retiro o envío y la aclaración general, y su reloj cuenta desde la aceptación.
@@ -256,15 +282,18 @@ stateDiagram-v2
 ### Mozo
 
 - Abre la cuenta de la mesa, carga rondas (incluso de un solo producto), marca ítems entregados y cierra la mesa.
+- Con la caja cerrada no abre mesas ni carga rondas: ve el aviso de que se lo pida al mostrador (él no puede abrir la caja). Se actualiza solo cuando la abren.
 - El resumen con el total que se muestra antes de cerrar la mesa (`/app/salon/[id]`) dice "Documento no válido como factura": el sistema no factura ni cobra. Cualquier otro lugar que muestre un total al cliente tiene que decir lo mismo.
 
 ## Realtime
 
 - Pantallas de sector: suscripción a `pedido_items` del sector, y a los cambios de `pedidos` del comercio (el mostrador acepta o cancela cambiando el pedido, no sus ítems).
-- Mostrador: suscripción a `pedidos` y `pedido_items` del comercio. Mozos: `pedido_items` y `cuentas`.
+- Mostrador: suscripción a `pedidos`, `pedido_items` y `cajas` del comercio. Mozos: `pedido_items`, `cuentas` y `cajas` (y, cargando una ronda, `productos`, `categorias` y `sectores`: la carta). Caja (`/app/caja`): `cajas`, `pedidos` y `cuentas` (el resumen y lo pendiente cambian con cada pedido o mesa).
+- Disponibilidad (sector y mostrador): `productos`, `categorias` y `sectores` del comercio, más los pedidos nuevos (para avisar que entró uno mientras se está ahí).
 - El seguimiento del cliente (landing) **no** usa Realtime: es anónimo (RLS no le manda ningún cambio, y abrírselo expondría pedidos ajenos) y cada cliente mirando su pedido gastaría una conexión de las del local. Consulta cada 10 segundos mientras la pantalla está a la vista.
+- La landing tampoco: para enterarse de que el local abrió o cerró la caja, o de lo que se quedó sin stock, consulta un endpoint cacheado en el CDN (ver "Landing pública").
 - Cada pantalla abierta es una conexión. Supabase Pro incluye 500 simultáneas (~50-80 locales activos).
 
 ## Fuera del Plan 1
 
-Promociones (2x1), grupos de adicionales, impresión de comandas, caja/cierres/reportes, stock por cantidades, pagos online, facturación.
+Promociones (2x1), grupos de adicionales, impresión de comandas, reportes (más allá del resumen de cierre de caja), stock por cantidades, pagos online, facturación.

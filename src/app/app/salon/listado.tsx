@@ -98,10 +98,13 @@ export function ListadoSalon({
   zonas,
   comercioId,
   usuarioId,
+  cajaAbierta,
 }: {
   zonas: ZonaSalon[];
   comercioId: string;
   usuarioId: string;
+  // Sin caja abierta, las mesas libres no se pueden abrir.
+  cajaAbierta: boolean;
 }) {
   const unicaZona = zonas.length === 1;
   const clave = claveAlmacenamiento(comercioId, usuarioId);
@@ -210,6 +213,18 @@ export function ListadoSalon({
                       </span>
                     </span>
                   </Link>
+                ) : !cajaAbierta ? (
+                  <div
+                    key={mesa.id}
+                    className="flex min-h-28 w-full flex-col justify-between rounded-2xl border-2 border-neutral-200 bg-neutral-50 p-5"
+                  >
+                    <span className="text-2xl font-bold text-neutral-500">
+                      {mesa.nombre}
+                    </span>
+                    <span className="text-base font-semibold text-neutral-500">
+                      Libre — la caja está cerrada
+                    </span>
+                  </div>
                 ) : (
                   <form key={mesa.id} action={abrirCuenta.bind(null, mesa.id)}>
                     <button

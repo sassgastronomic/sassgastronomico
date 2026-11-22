@@ -37,6 +37,12 @@ function construirSecciones({
     secciones.push({ href: "/app/carta", etiqueta: "Carta" });
   }
 
+  // La caja: dueño y mostrador, en cualquier plan (sin caja abierta el
+  // local no opera).
+  if (rol === "duenio" || rol === "mostrador") {
+    secciones.push({ href: "/app/caja", etiqueta: "Caja" });
+  }
+
   // Los pedidos online (mostrador): solo con un plan que tenga take away.
   // En plan salón no hay landing, y el mostrador ahí todavía no tiene
   // pantalla propia.

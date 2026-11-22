@@ -12,7 +12,8 @@ import type { Database } from "@/types/database";
  * ve un cliente, y una pantalla pública nunca puede apoyarse sin querer en
  * los permisos de alguien logueado. Lo único que `anon` puede hacer son
  * las funciones públicas (`carta_publica`, `crear_pedido_landing`,
- * `seguimiento_pedido`): ninguna tabla le deja leer nada (RLS).
+ * `seguimiento_pedido`, `estado_landing`): ninguna tabla le deja
+ * leer nada (RLS).
  *
  * Sin cookies, Next no se entera de que la página depende del request:
  * las páginas que lo usan llaman a `connection()` para no quedar
