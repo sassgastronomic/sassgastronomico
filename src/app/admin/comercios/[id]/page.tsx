@@ -1,15 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { formatearFecha } from "@/lib/fechas";
 import { crearClienteServidor } from "@/lib/supabase/server";
 
 import { FormularioEditarComercio } from "./formulario";
-
-const formateadorFecha = new Intl.DateTimeFormat("es-AR", {
-  day: "2-digit",
-  month: "2-digit",
-  year: "numeric",
-});
 
 export default async function PaginaEditarComercio({
   params,
@@ -23,7 +18,9 @@ export default async function PaginaEditarComercio({
   // distinguir el motivo acá.
   const { data: comercio } = await supabase
     .from("comercios")
-    .select("id, nombre, slug, plan, estado, limite_usuarios, whatsapp")
+    .select(
+      "id, nombre, slug, plan, estado, limite_usuarios, whatsapp, zona_horaria",
+    )
     .eq("id", id)
     .single();
 
@@ -85,7 +82,7 @@ export default async function PaginaEditarComercio({
             <div className="flex items-center justify-between gap-4">
               <dt className="text-neutral-500">Miembro desde</dt>
               <dd className="text-neutral-900">
-                {formateadorFecha.format(new Date(duenio.creado_en))}
+                {formatearFecha(duenio.creado_en, comercio.zona_horaria)}
               </dd>
             </div>
           </dl>

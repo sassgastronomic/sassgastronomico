@@ -7,7 +7,15 @@ import type { Database, RolMiembro } from "@/types/database";
 
 type ComercioContexto = Pick<
   Database["public"]["Tables"]["comercios"]["Row"],
-  "id" | "nombre" | "slug" | "plan" | "estado" | "limite_usuarios"
+  | "id"
+  | "nombre"
+  | "slug"
+  | "plan"
+  | "estado"
+  | "limite_usuarios"
+  // Para mostrar horas y fechas en la hora del local y no en la del
+  // servidor: ver src/lib/fechas.ts.
+  | "zona_horaria"
 >;
 
 type SectorAsignado = Pick<
@@ -68,7 +76,7 @@ export async function obtenerContextoComercio(): Promise<ContextoComercio> {
   const { data: miembro } = await supabase
     .from("miembros")
     .select(
-      "rol, perfiles(nombre), comercios(id, nombre, slug, plan, estado, limite_usuarios), miembro_sectores(sectores(id, nombre))",
+      "rol, perfiles(nombre), comercios(id, nombre, slug, plan, estado, limite_usuarios, zona_horaria), miembro_sectores(sectores(id, nombre))",
     )
     .eq("perfil_id", user.id)
     .eq("activo", true)

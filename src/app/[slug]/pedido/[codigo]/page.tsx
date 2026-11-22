@@ -4,6 +4,7 @@ import { connection } from "next/server";
 import { cache, type ReactNode } from "react";
 
 import { validarSlug } from "@/lib/comercios/validacion";
+import { formatearHora } from "@/lib/fechas";
 import { formatearPrecio, subtotalLinea, totalDelPedido } from "@/lib/landing/precios";
 import {
   etapaDelPedido,
@@ -181,11 +182,7 @@ export default async function PaginaSeguimiento({
   const estilo = ESTILO_ETAPA[etapa];
   const total = totalDelPedido(pedido.items);
   const { whatsapp } = pedido.comercio;
-  const hora = new Intl.DateTimeFormat("es-AR", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: pedido.comercio.zona_horaria,
-  }).format(new Date(pedido.creado_en));
+  const hora = formatearHora(pedido.creado_en, pedido.comercio.zona_horaria);
   const pasos = esEnvio
     ? ["Recibido", "En preparación", "En camino", "Entregado"]
     : ["Recibido", "En preparación", "Listo", "Retirado"];

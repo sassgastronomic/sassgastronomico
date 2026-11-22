@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 
 import { obtenerCajaAbierta } from "@/lib/caja/caja";
 import { obtenerContextoComercio } from "@/lib/comercio/contexto";
+import { formatearHora } from "@/lib/fechas";
 import { planPermiteSalon } from "@/lib/mesas/validacion";
 import { armarResumen } from "@/lib/salon/resumen";
 import { formatearTiempoAbierta } from "@/lib/salon/tiempo";
@@ -37,11 +38,6 @@ const formateadorPrecio = new Intl.NumberFormat("es-AR", {
   style: "currency",
   currency: "ARS",
 });
-const formateadorHora = new Intl.DateTimeFormat("es-AR", {
-  hour: "2-digit",
-  minute: "2-digit",
-});
-
 // Ventana de historial y tope de resultados para "Más pedidos" — números
 // elegidos a criterio (no pedidos por la tarea): dos semanas alcanza para
 // reflejar patrones sin quedar desactualizado, y por debajo de 3
@@ -459,7 +455,7 @@ export default async function PaginaSalonMesa({
                   Ronda #{ronda.numero ?? "—"}
                 </p>
                 <p className="text-sm text-neutral-500">
-                  {formateadorHora.format(new Date(ronda.creadoEn))}
+                  {formatearHora(ronda.creadoEn, contexto.comercio.zona_horaria)}
                 </p>
               </div>
               <div className="mt-2 space-y-1.5">

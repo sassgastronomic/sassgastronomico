@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { formatearFecha } from "@/lib/fechas";
 import { contarUsuariosOcupados } from "@/lib/miembros/plan";
 import { crearClienteServidor } from "@/lib/supabase/server";
 import type {
@@ -16,7 +17,14 @@ type Duenio = {
 
 type ComercioListado = Pick<
   Database["public"]["Tables"]["comercios"]["Row"],
-  "id" | "nombre" | "slug" | "plan" | "estado" | "limite_usuarios" | "creado_en"
+  | "id"
+  | "nombre"
+  | "slug"
+  | "plan"
+  | "estado"
+  | "limite_usuarios"
+  | "creado_en"
+  | "zona_horaria"
 > & {
   usuariosOcupados: number;
   duenio: Duenio | null;
@@ -48,12 +56,6 @@ const COLOR_ESTADO: Record<EstadoComercio, string> = {
   suspendido: "bg-red-50 text-red-700 ring-1 ring-inset ring-red-600/20",
 };
 
-const formateadorFecha = new Intl.DateTimeFormat("es-AR", {
-  day: "2-digit",
-  month: "2-digit",
-  year: "numeric",
-});
-
 /**
  * Trae todos los comercios (la policy `comercios_admin` los deja ver
  * completos solo a `es_admin()`) más, de una sola consulta a `miembros`,
@@ -79,7 +81,9 @@ async function obtenerComercios(): Promise<ResultadoComercios> {
 
   const { data: comercios, error: errorComercios } = await supabase
     .from("comercios")
-    .select("id, nombre, slug, plan, estado, limite_usuarios, creado_en")
+    .select(
+      "id, nombre, slug, plan, estado, limite_usuarios, creado_en, zona_horaria",
+    )
     .order("creado_en", { ascending: false });
 
   if (errorComercios || !comercios) {
@@ -277,7 +281,10 @@ export default async function PaginaAdmin() {
                         href={hrefEditar}
                         className="block px-4 py-3 text-neutral-500"
                       >
-                        {formateadorFecha.format(new Date(comercio.creado_en))}
+                        {formatearFecha(
+                          comercio.creado_en,
+                          comercio.zona_horaria,
+                        )}
                       </Link>
                     </td>
                   </tr>
