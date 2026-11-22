@@ -54,6 +54,43 @@ grant execute on function nombre_funcion(tipos, de, los, argumentos) to authenti
 - **Ojo con `authenticated`**: Supabase le da `EXECUTE` *directo* (no a través de `PUBLIC`) a toda función nueva del esquema `public`. Una función de uso interno — que solo llaman otras funciones `security definer`, como `plazos_seguimiento` o `motivo_estado_pedido` — tiene que revocárselo explícito: `revoke execute on function … from public, anon, authenticated;`.
 - Los triggers (`crear_perfil_nuevo_usuario`, `asignar_numero_pedido`, `validar_limite_usuarios`, etc.) llevan el `revoke` pero **sin** `grant` a ningún rol: nadie los invoca directo, el motor los dispara solo al ocurrir el evento (`insert`/`update` de la tabla), y eso no requiere `EXECUTE` de quien dispara el evento — revocar `PUBLIC` no rompe el trigger.
 
+## Advisors de Supabase
+
+El panel de Supabase (Advisors → Security / Performance) lista avisos automáticos. Algunos se arreglaron; otros están **aceptados a propósito**. Esta sección es el registro de cuáles y por qué, para no volver a discutirlos en cada repaso ni "arreglar" algo que es una decisión.
+
+### Arreglados
+
+Los dos, en `supabase/migrations/20261122045839_arreglos_advisors_rls_y_search_path.sql`:
+
+- **"Function Search Path Mutable" en `crear_zona_por_defecto`.** Era la única función del esquema que había quedado sin `search_path` fijo. Se le puso `set search_path = public`, igual que el resto (ver "Funciones nuevas").
+- **"Auth RLS Initialization Plan" en cinco policies** (`comercios_leer`, `perfiles_propio`, `perfiles_editar`, `miembros_propio`, `items_sector`). `auth.uid()` suelto dentro de una policy se evalúa una vez **por fila**; envuelto en `(select auth.uid())` se evalúa una vez **por consulta**. Es solo velocidad: no cambia qué puede ver ni escribir nadie. `auth.uid()` es `stable`, no depende de la fila y sigue dando `NULL` sin sesión, así que las filas que quedaban afuera siguen quedando afuera.
+
+### Aceptados a propósito
+
+**1. Funciones `security definer` que figuran como ejecutables.**
+
+Son las que la app llama por RPC: `abrir_caja`, `cerrar_caja`, `resumen_caja`, `situacion_caja`, `cerrar_cuenta`, `crear_pedido_mozo`, `crear_pedido_landing`, `aceptar_pedido_landing`, `cancelar_pedido_landing`, `entregar_pedido_landing`, `cambiar_item_pedido_landing`, `cambiar_stock_producto`, `carta_publica`, `estado_landing`, `seguimiento_pedido`, `usuario_disponible` y `usuarios_ocupados`.
+
+Que sean `security definer` **es el punto**, no un descuido: tienen que escribir en tablas que el usuario no puede tocar directo (un mozo crea un pedido pero no puede escribir en `pedidos` por su cuenta), o leer a través de comercios (`usuario_disponible`). Si corrieran con los privilegios de quien llama, RLS las frenaría y no habría cómo cargar un pedido.
+
+El candado no está en el `EXECUTE`, está **adentro** de cada función: valida permisos con `es_admin()` / `es_miembro()` / `tiene_rol()` y corta con `raise exception` si no corresponde. Un `EXECUTE` otorgado a `authenticated` lo tiene cualquier sesión logueada de cualquier comercio — eso ya está asumido y es la razón por la que la validación va adentro (ver "Funciones nuevas", el punto sobre `authenticated`).
+
+Qué haría falta para que el aviso desaparezca: nada que convenga hacer. Quitar `security definer` rompe la app; quitar el `EXECUTE` deja la función incallable.
+
+**2. Los ~330 avisos de "Multiple Permissive Policies".**
+
+Cada tabla de negocio tiene el mismo trío: `<tabla>_admin` (nosotros), `<tabla>_leer` (los miembros del comercio) y `<tabla>_duenio` (el dueño escribe). Son políticas **permisivas**, así que Postgres las combina con `OR` y las evalúa todas. El advisor emite una línea por cada combinación de tabla × operación × rol en la que aplica más de una policy, y por eso ~43 policies sobre poco más de una docena de tablas producen cientos de líneas: es el mismo puñado de reglas contado muchas veces, no cientos de problemas distintos.
+
+No es un problema de seguridad: varias policies permisivas **suman** permisos de forma explícita y auditable, que es exactamente el diseño que buscamos (ver "Roles"). Y el costo es despreciable a esta escala: son condiciones sobre columnas indexadas (`comercio_id`) y helpers `stable`, sobre tablas de miles de filas, no de millones.
+
+Qué haría falta para cerrarlo: fusionar los tres trípticos en una policy por tabla y operación con la lógica de rol adentro. Serían menos avisos y un esquema bastante más difícil de leer y de auditar, con la misma semántica. Mal negocio hoy. Si alguna vez una tabla pesada (`pedido_items`) muestra esto en un plan de ejecución real, se fusiona **esa** y se anota acá.
+
+**3. "Leaked Password Protection" desactivada.**
+
+Es el chequeo de Supabase Auth contra la base de HaveIBeenPwned al registrar o cambiar una contraseña. **Requiere plan Pro**, y el proyecto todavía está en Free.
+
+Qué haría falta para cerrarlo: pasar a Pro y activar el switch en Authentication → Policies. Es un cambio de configuración, no de esquema: no necesita migración ni toca el código. Cuando se pase a Pro (algo que ya está en el horizonte por las 500 conexiones de Realtime, ver "Realtime"), se activa y se borra este punto.
+
 ## Planes
 
 | Plan | Take away / delivery | Salón (mesas, mozos, QR) |
