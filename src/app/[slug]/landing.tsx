@@ -26,7 +26,7 @@ import {
   validarNombreCliente,
   validarNotaPedido,
 } from "@/lib/landing/validacion";
-import { enlaceAppWhatsApp, enlaceWhatsApp } from "@/lib/landing/whatsapp";
+import { enlaceWhatsApp } from "@/lib/landing/whatsapp";
 import type { ModalidadPedido } from "@/types/database";
 
 import { enviarPedido, type CampoPedido } from "./actions";
@@ -49,7 +49,7 @@ import {
   IconoMenos,
   IconoReloj,
 } from "./iconos";
-import { PantallaEnviado, type EstadoWhatsapp } from "./pantalla-enviado";
+import { PantallaEnviado } from "./pantalla-enviado";
 import { VigilarEstadoLocal } from "./vigilar-estado-local";
 
 export type AdicionalLanding = {
@@ -114,14 +114,6 @@ const PARAM_ENVIADO = "enviado";
 // history.state, que Next conserva al ir y volver con el navegador.
 const CLAVE_PROFUNDIDAD = "profundidadLanding";
 
-// Tope de la capa "Abriendo WhatsApp…": si en este tiempo la página nunca
-// dejó de estar a la vista (el celular no pasó a WhatsApp: no lo tiene
-// instalado, o el navegador no lo dejó abrirse solo), la capa se va igual
-// y la pantalla dice que no se abrió. Pasar a la app tarda menos de un par
-// de segundos aun en celulares lentos; esperar más es dejar al cliente
-// mirando un spinner.
-const TOPE_ESPERA_WHATSAPP_MS = 4000;
-
 const ORDEN_CAMPOS: CampoPedido[] = ["modalidad", "direccion", "nombre", "nota"];
 
 function idSeccion(categoriaId: string): string {
@@ -155,12 +147,6 @@ function urlDe(params: URLSearchParams): string {
   return texto ? `?${texto}` : window.location.pathname;
 }
 
-// En el celular, WhatsApp se abre en la misma pestaña (el sistema le pasa
-// el link a la app); en la compu, en una pestaña nueva.
-function seAbreEnPestanaNueva(): boolean {
-  return !window.matchMedia("(pointer: coarse)").matches;
-}
-
 function mismosIds(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
   if (a.size !== b.size) return false;
   for (const id of a) if (!b.has(id)) return false;
@@ -187,9 +173,10 @@ function numeroDePedido(texto: string | null): number | null {
  * - Lo que el cliente arma o escribe no se pierde (ver almacen-local.ts).
  *
  * El contacto con el cliente es WhatsApp (no se le pide teléfono): al
- * confirmar, se crea el pedido y se le abre el chat del local con el
- * pedido escrito. El link de seguimiento se le muestra en ese mismo
- * momento (y va en el mensaje), para que lo guarde.
+ * confirmar se crea el pedido, y la pantalla que sigue tiene el botón
+ * —un enlace de verdad— con el que el cliente le manda el pedido al
+ * local. Ahí mismo se le muestra el link de seguimiento (que además va en
+ * el mensaje), para que lo guarde.
  */
 export function Landing({
   slug,
@@ -558,102 +545,7 @@ export function Landing({
     );
   }
 
-  // --- WhatsApp --------------------------------------------------------
-
-  const [estadoWhatsapp, setEstadoWhatsapp] = useState<EstadoWhatsapp>(null);
-
-  /**
-   * Abre el chat del local con `mensaje` ya escrito.
-   *
-   * En el celular, primero directo a la app (whatsapp://), en la misma
-   * pestaña: si está instalada, se abre sin la página intermedia de wa.me
-   * y la página queda como estaba, así que al volver el cliente ve la
-   * pantalla de "pedido enviado". Si no está instalada, la página nunca se
-   * oculta: al tope de espera aparece el aviso de "no se abrió", y desde
-   * ahí el botón manual usa wa.me (`usarWeb`), que funciona siempre (abre
-   * la app si la encuentra, o la web de WhatsApp; "atrás" vuelve a esta
-   * pantalla). En la compu, siempre wa.me en una pestaña nueva, para no
-   * perder esta.
-   *
-   * Mientras tanto, la pantalla de "pedido enviado" queda tapada por la
-   * capa "Abriendo WhatsApp…" (estado "abriendo"): sin ella, el cliente
-   * llegaba a ver un instante la pantalla antes de que WhatsApp se llevara
-   * el foco. Cuándo se saca la capa lo decide el efecto de abajo. Si abrir
-   * falla de entrada (el navegador bloquea la pestaña nueva, o tira un
-   * error), no hay capa: va directo al aviso de "no se abrió".
-   */
-  function abrirWhatsapp(mensaje: string, usarWeb = false) {
-    try {
-      if (seAbreEnPestanaNueva()) {
-        const ventana = window.open(
-          enlaceWhatsApp(comercio.whatsapp, mensaje),
-          "_blank",
-        );
-        if (!ventana) {
-          setEstadoWhatsapp("sin-abrir");
-          return;
-        }
-        ventana.opener = null;
-      } else {
-        window.location.assign(
-          usarWeb
-            ? enlaceWhatsApp(comercio.whatsapp, mensaje)
-            : enlaceAppWhatsApp(comercio.whatsapp, mensaje),
-        );
-      }
-    } catch {
-      setEstadoWhatsapp("sin-abrir");
-      return;
-    }
-    setEstadoWhatsapp("abriendo");
-  }
-
-  // Cuándo se va la capa "Abriendo WhatsApp…" (y, si quedó el aviso de "no
-  // se abrió", cuándo se va el aviso):
-  // - el cliente vuelve a la pestaña después de haberse ido (pasó a
-  //   WhatsApp): "abierto";
-  // - pasó el tope y la página nunca dejó de estar a la vista: "sin-abrir"
-  //   — salvo en la compu, donde la pestaña nueva sí se abrió (si quedó
-  //   atrás, la página nunca se oculta) y no hay nada de qué avisar.
-  // Se mira con los eventos del navegador (al instante) y, mientras está la
-  // capa, también cada medio segundo: si algún navegador no avisa al
-  // volver, la capa no queda trabada igual. Todo en el celular, sin red.
-  useEffect(() => {
-    if (estadoWhatsapp !== "abriendo" && estadoWhatsapp !== "sin-abrir") {
-      return;
-    }
-    const esperando = estadoWhatsapp === "abriendo";
-    const desde = Date.now();
-    // Por si el celular ya pasó a WhatsApp antes de que esto se enganche.
-    let seFue = document.visibilityState === "hidden";
-
-    function revisar() {
-      if (document.visibilityState === "hidden") {
-        seFue = true;
-        return;
-      }
-      if (seFue) {
-        setEstadoWhatsapp("abierto");
-        return;
-      }
-      if (esperando && Date.now() - desde >= TOPE_ESPERA_WHATSAPP_MS) {
-        setEstadoWhatsapp(seAbreEnPestanaNueva() ? "abierto" : "sin-abrir");
-      }
-    }
-
-    document.addEventListener("visibilitychange", revisar);
-    // `pageshow`: volver con "atrás" a una página guardada por el navegador
-    // (si en vez de la app se abrió la web de WhatsApp).
-    window.addEventListener("pageshow", revisar);
-    window.addEventListener("focus", revisar);
-    const intervalo = esperando ? setInterval(revisar, 500) : null;
-    return () => {
-      document.removeEventListener("visibilitychange", revisar);
-      window.removeEventListener("pageshow", revisar);
-      window.removeEventListener("focus", revisar);
-      if (intervalo) clearInterval(intervalo);
-    };
-  }, [estadoWhatsapp]);
+  // --- Pedido enviado -----------------------------------------------
 
   function alEnviarPedido(resultado: PedidoEnviado, datos: DatosCliente) {
     recordarPedido(slug, {
@@ -675,9 +567,10 @@ export function Landing({
       "",
       urlDe(params),
     );
-    // Enseguida, sin esperar nada más: cuanto más cerca del toque en
-    // "Confirmar", más navegadores dejan abrir la app.
-    abrirWhatsapp(resultado.mensaje);
+    // Y ahí termina lo que hace el código: el mensaje al local lo manda el
+    // cliente tocando el botón de esa pantalla, que es un enlace de
+    // verdad (ver pantalla-enviado.tsx). No se abre WhatsApp por código:
+    // es lo que hacía que iOS preguntara antes de abrirlo.
   }
 
   // --- Barra de categorías --------------------------------------------
@@ -915,12 +808,6 @@ export function Landing({
             null
           }
           nombreCliente={datosGuardados.nombre}
-          estadoWhatsapp={estadoWhatsapp}
-          // Después de un "no se abrió", el botón manual va por wa.me: la
-          // app directa ya falló una vez.
-          onAbrirChat={(mensaje) =>
-            abrirWhatsapp(mensaje, estadoWhatsapp === "sin-abrir")
-          }
           onVolverALaCarta={volverALaCarta}
         />
       )}
@@ -1801,8 +1688,9 @@ function HojaPedido({
 
 /**
  * Último paso antes de crear el pedido: el resumen completo y el total,
- * para revisarlo con calma. Al confirmar se crea el pedido y se abre
- * WhatsApp con el detalle ya escrito.
+ * para revisarlo con calma. Al confirmar se crea el pedido y aparece la
+ * pantalla de enviado, donde el cliente toca el botón que se lo manda al
+ * local por WhatsApp.
  */
 function ConfirmacionPedido({
   lineas,
@@ -1844,17 +1732,16 @@ function ConfirmacionPedido({
             aria-live="polite"
             className="flex flex-col items-center px-6 pt-14 pb-[max(3.5rem,env(safe-area-inset-bottom))] text-center"
           >
-            {/* El mismo spinner que la capa de la pantalla que sigue: de
-                una a la otra no hay salto. */}
-            <span
-              aria-hidden="true"
-              className="h-14 w-14 animate-spin rounded-full border-4 border-green-200 border-t-green-600 motion-reduce:animate-none"
-            />
+            {/* Lo que se ve el instante que va de confirmar a la pantalla
+                de enviado: sin esto volvería a asomar el resumen. */}
+            <span className="flex h-14 w-14 items-center justify-center rounded-full bg-green-100 text-green-700">
+              <IconoListo className="h-8 w-8" />
+            </span>
             <p id="titulo-confirmacion" className="mt-4 text-2xl font-bold">
-              Abriendo WhatsApp…
+              ¡Listo, pedido hecho!
             </p>
-            <p className="mt-2 text-base text-neutral-600">
-              Tu pedido ya va escrito: solo tenés que apretar enviar.
+            <p className="mt-2 text-base text-pretty text-neutral-600">
+              Ahora mandáselo al local por WhatsApp.
             </p>
           </div>
         ) : (
@@ -1867,8 +1754,8 @@ function ConfirmacionPedido({
                 Revisá tu pedido
               </h2>
               <p className="mt-1 text-base text-pretty text-neutral-600">
-                Si está todo bien, confirmalo: se abre WhatsApp con el pedido
-                ya escrito y solo tenés que apretar enviar.
+                Si está todo bien, confirmalo: después se lo mandás al local
+                por WhatsApp, con el pedido ya escrito.
               </p>
 
               <ul className="mt-5 divide-y divide-neutral-100 rounded-2xl border border-neutral-200 px-4">
@@ -1960,10 +1847,9 @@ function ConfirmacionPedido({
                 type="button"
                 onClick={onConfirmar}
                 disabled={pendiente}
-                className="flex w-full items-center justify-center gap-3 rounded-2xl bg-green-600 px-6 py-4 text-lg font-bold text-white shadow-lg shadow-green-600/20 active:bg-green-700 disabled:opacity-60"
+                className="w-full rounded-2xl bg-green-600 px-6 py-4 text-lg font-bold text-white shadow-lg shadow-green-600/20 active:bg-green-700 disabled:opacity-60"
               >
-                <IconoChat className="h-6 w-6 shrink-0" />
-                {pendiente ? "Enviando tu pedido…" : "Confirmar y enviar por WhatsApp"}
+                {pendiente ? "Confirmando tu pedido…" : "Confirmar pedido"}
               </button>
               <button
                 type="button"

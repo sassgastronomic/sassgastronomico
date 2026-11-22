@@ -8,25 +8,54 @@ import { enlaceWhatsApp, mensajeConsultaPedido } from "@/lib/landing/whatsapp";
 import type { PedidoReciente } from "./almacen-local";
 import { IconoChat, IconoCompartir, IconoCopiar } from "./iconos";
 
-// Qué pasó al intentar abrir WhatsApp: `null` si no hubo intento en esta
-// visita (por ejemplo, se volvió a esta pantalla desde la carta).
-export type EstadoWhatsapp = "abriendo" | "abierto" | "sin-abrir" | null;
-
 function sinSuscripcion() {
   return () => {};
 }
 
 /**
- * Lo que ve el cliente después de enviar el pedido (y al volver de
- * WhatsApp): su link de seguimiento, para que lo guarde, y que si lo
- * pierde se lo pida al local por WhatsApp. El link también va en el
- * mensaje que le mandó al local, así que queda en su propio chat.
+ * Si el chat se abre en una pestaña nueva o en la misma.
  *
- * El mensaje con el pedido es además el único contacto con el cliente (la
- * landing no pide teléfono): si no llegó a mandarlo, el local no tiene
- * cómo hablarle. Por eso "Ir al chat del local" abre el chat con el
- * pedido escrito otra vez — si ya lo había mandado, mandarlo de nuevo no
- * confunde a nadie: arranca con el mismo número.
+ * En el celular va en la misma pestaña: el sistema le pasa el link a la
+ * app y la página queda atrás tal como estaba, así que al volver el
+ * cliente encuentra su link de seguimiento. En la compu se abre una
+ * pestaña nueva, para no perder esta.
+ *
+ * Se decide *durante el render*, porque el `target` del enlace tiene que
+ * estar puesto antes de que lo toquen. En el servidor y en el primer
+ * render es `false` —misma pestaña, lo que corresponde en el celular— y se
+ * corrige al hidratar. No se resuscribe a los cambios de viewport a
+ * propósito: nadie pasa de dedo a mouse con esta pantalla abierta, y así
+ * el enlace no cambia bajo el dedo.
+ */
+function useSeAbreEnPestanaNueva(): boolean {
+  return useSyncExternalStore(
+    sinSuscripcion,
+    () => !window.matchMedia("(pointer: coarse)").matches,
+    () => false,
+  );
+}
+
+/**
+ * Lo que ve el cliente después de confirmar el pedido (y al volver a esta
+ * pantalla desde la carta). Dos cosas, en este orden:
+ *
+ * 1. El botón para mandarle el pedido al local por WhatsApp. El pedido ya
+ *    está creado y el local lo ve en su pantalla, pero ese mensaje es el
+ *    único contacto con el cliente (la landing no pide teléfono): si no
+ *    llega a mandarlo, el local no tiene cómo hablarle. Es el paso que
+ *    falta, así que es lo más prominente de la pantalla.
+ * 2. Su link de seguimiento, para que lo guarde. También va dentro del
+ *    mensaje, así que le queda en su propio chat; y si lo pierde, se lo
+ *    puede pedir al local.
+ *
+ * El botón es un enlace de verdad, que el cliente toca: así la navegación
+ * es un gesto suyo y no una redirección por código, que es lo que hace
+ * que iOS pregunte antes de abrir la app. Nada de preventDefault ni
+ * window.location acá.
+ *
+ * Si el cliente vuelve a esta pantalla después de haber mandado el
+ * mensaje, el botón sigue ahí: no hay forma de saber si lo mandó, y
+ * mandarlo de nuevo no confunde a nadie —arranca con el mismo número—.
  */
 export function PantallaEnviado({
   slug,
@@ -34,8 +63,6 @@ export function PantallaEnviado({
   numero,
   pedido,
   nombreCliente,
-  estadoWhatsapp,
-  onAbrirChat,
   onVolverALaCarta,
 }: {
   slug: string;
@@ -46,20 +73,30 @@ export function PantallaEnviado({
   // chat va un mensaje corto con el número, que alcanza para ubicarlo.
   pedido: PedidoReciente | null;
   nombreCliente: string;
-  estadoWhatsapp: EstadoWhatsapp;
-  // Recibe el mensaje; la landing elige el link (app directa o wa.me).
-  onAbrirChat: (mensaje: string) => void;
   onVolverALaCarta: () => void;
 }) {
-  const mensajeChat =
+  const enPestanaNueva = useSeAbreEnPestanaNueva();
+  /**
+   * El link al chat, armado acá —antes de que lo toquen— y puesto en el
+   * href: con el número de pedido y el link de seguimiento ya dentro del
+   * mensaje, que es justo lo que no existía antes de confirmar.
+   *
+   * Va por wa.me y no por `whatsapp://` a propósito: wa.me es un universal
+   * link, así que al tocarlo con la app instalada iOS la abre sin
+   * preguntar y sin pasar por la página intermedia. `whatsapp://` es un
+   * esquema propio, y esos son justo los que hacen aparecer el cartel de
+   * "¿Abrir en WhatsApp?". De paso wa.me es el respaldo para quien no
+   * tenga la app (le abre la web), y sigue funcionando en la compu,
+   * manteniendo apretado para copiar el link y sin JavaScript.
+   */
+  const enlaceChat = enlaceWhatsApp(
+    comercio.whatsapp,
     pedido?.mensaje ??
-    mensajeConsultaPedido({
-      numero,
-      cliente_nombre: nombreCliente || undefined,
-    });
-  // El href queda en wa.me (funciona siempre, también al mantener apretado
-  // o sin JavaScript); el toque normal lo maneja la landing.
-  const enlaceChat = enlaceWhatsApp(comercio.whatsapp, mensajeChat);
+      mensajeConsultaPedido({
+        numero,
+        cliente_nombre: nombreCliente || undefined,
+      }),
+  );
 
   return (
     <div
@@ -70,10 +107,7 @@ export function PantallaEnviado({
     >
       <div className="mx-auto flex min-h-full max-w-md flex-col px-5 pt-12 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
         <div className="flex-1">
-          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-green-100 text-green-700">
-            <IconoChat className="h-8 w-8" />
-          </div>
-          <p className="mt-6 text-base font-semibold text-neutral-500">
+          <p className="text-base font-semibold text-neutral-500">
             {comercio.nombre}
           </p>
           <h1
@@ -82,12 +116,36 @@ export function PantallaEnviado({
           >
             Tu pedido es el #{numero}
           </h1>
-          <p className="mt-2 text-base text-neutral-600">
-            Ya lo tiene el local.
+          <p className="mt-3 text-lg font-semibold text-pretty text-neutral-900">
+            {pedido
+              ? "Falta un paso: mandáselo al local por WhatsApp."
+              : "Falta un paso: avisale al local por WhatsApp."}
+          </p>
+          <p className="mt-1 text-base text-pretty text-neutral-600">
+            Es por ahí que el local te va a contestar.
+          </p>
+
+          {/* El paso que falta, arriba de todo y lo más grande de la
+              pantalla: sin este mensaje el local no tiene cómo hablarle. */}
+          <a
+            href={enlaceChat}
+            // En la compu, pestaña nueva para no perder esta pantalla. En
+            // el celular, la misma: el sistema le pasa el link a la app.
+            target={enPestanaNueva ? "_blank" : undefined}
+            rel={enPestanaNueva ? "noopener noreferrer" : undefined}
+            className="mt-5 flex w-full items-center justify-center gap-3 rounded-2xl bg-green-600 px-6 py-5 text-xl font-bold text-white shadow-lg shadow-green-600/25 active:bg-green-700"
+          >
+            <IconoChat className="h-7 w-7 shrink-0" />
+            {pedido ? "Enviá tu pedido por WhatsApp" : "Escribile al local"}
+          </a>
+          <p className="mt-3 text-base text-pretty text-neutral-600">
+            {pedido
+              ? "Se abre el chat del local con tu pedido ya escrito: solo tenés que apretar enviar."
+              : `Se abre el chat del local: contale que hiciste el pedido #${numero}.`}
           </p>
 
           {pedido ? (
-            <section className="mt-8 rounded-2xl bg-white p-5 ring-1 ring-neutral-200">
+            <section className="mt-9 rounded-2xl bg-white p-5 ring-1 ring-neutral-200">
               <h2 className="text-lg font-bold">Guardá este link</h2>
               <p className="mt-1 text-base text-pretty text-neutral-600">
                 Con él ves cómo va tu pedido: cuándo lo aceptan y cuándo
@@ -105,55 +163,19 @@ export function PantallaEnviado({
                 <span aria-hidden="true">→</span>
               </Link>
               <p className="mt-4 text-sm text-pretty text-neutral-600">
-                Si lo perdés, pedíselo al local por WhatsApp. También quedó
-                en el mensaje que le mandaste.
+                Si lo perdés, pedíselo al local por WhatsApp. También va en
+                el mensaje que le mandás.
               </p>
             </section>
           ) : (
-            <p className="mt-8 rounded-2xl bg-white p-5 text-base text-pretty text-neutral-600 ring-1 ring-neutral-200">
+            <p className="mt-9 rounded-2xl bg-white p-5 text-base text-pretty text-neutral-600 ring-1 ring-neutral-200">
               Si no tenés el link para seguir tu pedido, pedíselo al local
               por WhatsApp.
             </p>
           )}
-
-          {estadoWhatsapp === "sin-abrir" ? (
-            <p
-              role="alert"
-              className="mt-6 rounded-2xl bg-amber-50 px-4 py-4 text-base text-pretty text-amber-950 ring-1 ring-amber-200"
-            >
-              <strong className="font-semibold">WhatsApp no se abrió.</strong>{" "}
-              {pedido
-                ? "Tocá «Ir al chat del local» y apretá enviar: tu pedido ya va escrito."
-                : `Tocá «Ir al chat del local» y contale que hiciste el pedido #${numero}.`}
-            </p>
-          ) : (
-            <p className="mt-6 text-sm text-pretty text-neutral-500">
-              {pedido
-                ? "¿No llegaste a mandar el mensaje con tu pedido? Tocá «Ir al chat del local»: va a estar escrito."
-                : `¿No llegaste a mandarle el mensaje al local? Tocá «Ir al chat del local» y contale que hiciste el pedido #${numero}.`}
-            </p>
-          )}
         </div>
 
-        {estadoWhatsapp === "abriendo" && <CapaAbriendoWhatsapp />}
-
-        <div className="mt-10 space-y-3">
-          <a
-            href={enlaceChat}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(evento) => {
-              // Mismo camino que el intento automático (app directa en el
-              // celular, con la capa de espera; wa.me si ya falló una vez,
-              // o en la compu).
-              evento.preventDefault();
-              onAbrirChat(mensajeChat);
-            }}
-            className="flex w-full items-center justify-center gap-3 rounded-2xl bg-green-600 px-6 py-4 text-lg font-bold text-white shadow-lg shadow-green-600/20 active:bg-green-700"
-          >
-            <IconoChat className="h-6 w-6 shrink-0" />
-            Ir al chat del local
-          </a>
+        <div className="mt-10">
           <button
             type="button"
             onClick={onVolverALaCarta}
@@ -162,34 +184,6 @@ export function PantallaEnviado({
             Volver a la carta
           </button>
         </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Mientras se abre WhatsApp, encima de esta pantalla. Semitransparente a
- * propósito: el cliente alcanza a ver que hay algo debajo, y al volver
- * encuentra ahí el link. La saca la landing (cuando el cliente vuelve a la
- * pestaña, o al tope de espera): ver abrirWhatsapp en landing.tsx.
- */
-function CapaAbriendoWhatsapp() {
-  return (
-    <div
-      role="status"
-      className="fixed inset-0 z-10 flex flex-col items-center justify-center gap-5 bg-neutral-50/75 px-8 text-center backdrop-blur-[2px]"
-    >
-      <span
-        aria-hidden="true"
-        className="h-14 w-14 animate-spin rounded-full border-4 border-green-200 border-t-green-600 motion-reduce:animate-none"
-      />
-      <div>
-        <p className="text-2xl font-bold text-neutral-900">
-          Abriendo WhatsApp…
-        </p>
-        <p className="mt-2 max-w-xs text-base text-pretty text-neutral-700">
-          Cuando vuelvas, vas a encontrar acá el link para seguir tu pedido.
-        </p>
       </div>
     </div>
   );

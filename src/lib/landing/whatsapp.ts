@@ -10,24 +10,24 @@ import { formatearPrecio, subtotalLinea, totalDelPedido } from "./precios";
  * Link que abre WhatsApp con el mensaje ya escrito: el cliente solo tiene
  * que apretar enviar. `numero` va como lo guarda `comercios.whatsapp`
  * (solo dígitos, con código de país), que es lo que pide wa.me.
+ *
+ * Siempre por wa.me, nunca por un esquema propio (`whatsapp://`): wa.me es
+ * un universal link, así que al tocarlo en el celular con la app instalada
+ * el sistema la abre directo, sin preguntar y sin pasar por la página
+ * intermedia; un esquema propio es justo lo que hace aparecer el cartel de
+ * "¿Abrir en WhatsApp?" en iOS. Y si la app no está, wa.me abre la web: es
+ * el respaldo, sin que haya que hacer nada.
+ *
+ * Eso vale cuando el cliente *toca un enlace* con esto en el href. Si la
+ * navegación la dispara código, el sistema la trata como que no la pidió
+ * nadie y cae igual en el navegador: por eso este link va en un `<a>` y no
+ * en un window.location (ver src/app/[slug]/pantalla-enviado.tsx).
+ *
+ * El texto va con encodeURIComponent: los saltos de línea quedan como %0A,
+ * y "#", "&" o "+" no se confunden con partes de la dirección.
  */
 export function enlaceWhatsApp(numero: string, mensaje: string): string {
   return `https://wa.me/${numero}?text=${encodeURIComponent(mensaje)}`;
-}
-
-/**
- * Lo mismo, pero directo a la app (sin la página intermedia de wa.me que
- * pregunta si abrirla). Solo sirve si WhatsApp está instalado: si no, el
- * navegador no hace nada (o avisa que no puede abrir la dirección), así
- * que siempre va con wa.me de respaldo — ver abrirWhatsapp en
- * src/app/[slug]/landing.tsx.
- *
- * El texto va con encodeURIComponent, igual que en wa.me: los saltos de
- * línea quedan como %0A, y "#", "&" o "+" no se confunden con partes de la
- * dirección.
- */
-export function enlaceAppWhatsApp(numero: string, mensaje: string): string {
-  return `whatsapp://send?phone=${numero}&text=${encodeURIComponent(mensaje)}`;
 }
 
 export type PedidoParaMensaje = {
