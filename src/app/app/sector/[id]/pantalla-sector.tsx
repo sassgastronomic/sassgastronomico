@@ -2,7 +2,13 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import { formatearTiempoAbierta } from "@/lib/salon/tiempo";
 import { estaDemorado } from "@/lib/sector/tiempo";
@@ -36,6 +42,15 @@ export type PedidoConItems = {
     nota: string | null;
   } | null;
   items: ItemPedido[];
+};
+
+// Lo que queda de un pedido que ya desapareció de la lista: con esto se
+// arma el aviso, porque el pedido cancelado no vuelve en el refresco.
+type PedidoCancelado = {
+  id: string;
+  numero: number | null;
+  // De quién era: el cliente de la landing, la mesa, o nada de eso.
+  quien: string;
 };
 
 const ETIQUETA_ESTADO: Record<EstadoItem, string> = {
@@ -107,6 +122,7 @@ export function PantallaSector({
   const router = useRouter();
   const [solapa, setSolapa] = useState<"en_cocina" | "listos">(solapaInicial);
   const [avisoNuevo, setAvisoNuevo] = useState(false);
+  const [cancelados, setCancelados] = useState<PedidoCancelado[]>([]);
   const [conectado, setConectado] = useState(true);
   const [wakeLockActivo, setWakeLockActivo] = useState(true);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
@@ -157,6 +173,32 @@ export function PantallaSector({
     };
   }, [wakeLockActivo, wakeLockSoportado]);
 
+  // Un pedido cancelado deja de cumplir el filtro de la consulta, así que
+  // en el refresco que viene se va de la pantalla sin más. Hay que anotar
+  // quién era ANTES de refrescar, y para eso hace falta la lista de ahora:
+  // `useEffectEvent` la lee sin tener que volver a suscribirse a Realtime
+  // cada vez que cambia un pedido.
+  const anotarCancelado = useEffectEvent((pedidoId: string) => {
+    const pedido = pedidos.find((candidato) => candidato.id === pedidoId);
+    // No está en esta pantalla: no tiene ítems de este sector, o es un
+    // pedido de la landing que el mostrador rechazó antes de aceptarlo.
+    // Nadie lo estaba preparando, así que no hay nada que avisar.
+    if (!pedido) return;
+    setCancelados((actuales) =>
+      actuales.some((cancelado) => cancelado.id === pedidoId)
+        ? actuales
+        : [
+            ...actuales,
+            {
+              id: pedido.id,
+              numero: pedido.numero,
+              quien:
+                pedido.online?.cliente || pedido.mesaNombre || "Para llevar",
+            },
+          ],
+    );
+  });
+
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let huboInsert = false;
@@ -183,7 +225,8 @@ export function PantallaSector({
     // - `pedidos` del comercio: el mostrador acepta o cancela un pedido
     //   online cambiando el pedido, no sus ítems — sin esto, un pedido
     //   aceptado no aparecería hasta el próximo refresco. Un pedido aceptado
-    //   cuenta como "nuevo" para el aviso, igual que una ronda del mozo.
+    //   cuenta como "nuevo" para el aviso, igual que una ronda del mozo, y
+    //   uno cancelado deja su propio aviso (ver `anotarCancelado`).
     const desuscribirse = suscribirseConSesion((supabase) =>
       supabase
         .channel(`sector-${sectorId}`)
@@ -207,7 +250,11 @@ export function PantallaSector({
           },
           (payload) => {
             const fila = payload.new;
-            programarRefresco("estado" in fila && fila.estado === "confirmado");
+            const estado = "estado" in fila ? fila.estado : null;
+            if (estado === "cancelado" && typeof fila.id === "string") {
+              anotarCancelado(fila.id);
+            }
+            programarRefresco(estado === "confirmado");
           },
         )
         .subscribe((estado) => {
@@ -243,6 +290,41 @@ export function PantallaSector({
 
   return (
     <div className="space-y-4">
+      {/* El más importante de los tres avisos, y el único que no se va
+          solo: hay que cerrarlo. Queda pegado arriba mientras esté abierto
+          para que no se pierda al bajar por la lista de pedidos — al
+          cocinero le puede estar saliendo algo que ya no va. */}
+      {cancelados.length > 0 && (
+        <div
+          role="alert"
+          className="sticky top-0 z-40 rounded-lg border-4 border-red-900 bg-red-600 p-4 text-white shadow-lg"
+        >
+          <p className="text-2xl font-black tracking-tight">
+            {cancelados.length === 1
+              ? "Pedido cancelado"
+              : `${cancelados.length} pedidos cancelados`}
+          </p>
+          <ul className="mt-2 space-y-1">
+            {cancelados.map((cancelado) => (
+              <li key={cancelado.id} className="text-xl font-bold">
+                #{cancelado.numero ?? "—"} · {cancelado.quien}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-lg font-semibold text-red-50">
+            {cancelados.length === 1 ? "No lo prepares" : "No los prepares"}. Si
+            ya estaba hecho, avisale al mostrador.
+          </p>
+          <button
+            type="button"
+            onClick={() => setCancelados([])}
+            className="mt-3 min-h-14 w-full rounded-lg bg-white px-4 py-3 text-lg font-black text-red-700 active:bg-red-50"
+          >
+            Entendido
+          </button>
+        </div>
+      )}
+
       {!conectado && (
         <p className="rounded-lg border-2 border-amber-300 bg-amber-50 px-4 py-3 text-lg font-bold text-amber-800">
           Reconectando…
