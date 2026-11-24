@@ -2,9 +2,11 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { obtenerContextoComercio } from "@/lib/comercio/contexto";
+import { origenDelRequest } from "@/lib/landing/link";
 import { planPermiteSalon } from "@/lib/mesas/validacion";
 import { crearClienteServidor } from "@/lib/supabase/server";
 
+import { InterruptorQrMesa } from "./interruptor-qr";
 import { ListadoMesas, type MesaListado, type ZonaConMesas } from "./listado";
 
 type ResultadoMesas =
@@ -185,6 +187,13 @@ export default async function PaginaMesas({
       )}
 
       {zonasVisibles.length > 0 && <ListadoMesas zonas={zonasVisibles} />}
+
+      {/* Configuración del salón, debajo de las mesas: es lo que el dueño
+          toca una vez, no todos los días. */}
+      <InterruptorQrMesa
+        activo={contexto.comercio.qr_mesa_activo}
+        linkMesa={`${await origenDelRequest()}/${contexto.comercio.slug}/mesa`}
+      />
     </div>
   );
 }

@@ -68,6 +68,11 @@ export type CartaPublicaResultado = {
     nombre: string;
     plan: PlanComercio;
     whatsapp: string | null;
+    // Si el local toma pedidos por QR de mesa. Lo usa /{slug}/mesa para
+    // mostrar una pantalla clara en vez de dejar armar un pedido que
+    // `crear_borrador_qr` después va a rechazar. La landing de take away
+    // lo ignora.
+    qr_mesa_activo: boolean;
     // Si hay caja abierta. Con la caja cerrada la landing muestra la carta
     // pero no deja pedir (y crear_pedido_landing lo rechaza igual).
     tomando_pedidos: boolean;
@@ -178,6 +183,12 @@ export interface Database {
           // Solo dígitos, con código de país y sin "+" (lo que pide wa.me).
           // Null: la landing no ofrece avisar por WhatsApp.
           whatsapp: string | null;
+          // Si el local toma pedidos por QR de mesa (/{slug}/mesa). Apagado
+          // por defecto; lo prende el dueño desde /app/mesas, con la
+          // función `cambiar_qr_mesa` — no hay policy de UPDATE sobre esta
+          // tabla para el dueño a propósito (habilitaría la fila entera:
+          // plan, estado y límite de usuarios incluidos).
+          qr_mesa_activo: boolean;
           creado_en: string;
         };
         Insert: {
@@ -190,6 +201,7 @@ export interface Database {
           zona_horaria?: string;
           hora_corte?: string;
           whatsapp?: string | null;
+          qr_mesa_activo?: boolean;
           creado_en?: string;
         };
         Update: Partial<Database["public"]["Tables"]["comercios"]["Insert"]>;
@@ -869,6 +881,24 @@ export interface Database {
       seguimiento_pedido: {
         Args: { p_slug: string; p_codigo: string };
         Returns: SeguimientoPedidoResultado | null;
+      };
+      // Borrador del pedido que un cliente arma en la mesa con el QR
+      // (anónimo, igual que la landing): valida comercio activo, plan con
+      // salón, interruptor prendido, caja abierta y disponibilidad
+      // efectiva de cada producto. No crea ningún pedido — eso pasa
+      // recién cuando el mozo escanea (`convertir_borrador_qr`). Devuelve
+      // el código corto que va en el QR y hasta cuándo vale.
+      crear_borrador_qr: {
+        Args: { p_slug: string; p_items: ItemPedidoLanding[] };
+        Returns: { codigo: string; vence_en: string };
+      };
+      // El interruptor del QR de mesa, en manos del dueño (/app/mesas).
+      // Valida `tiene_rol(duenio)` y el plan adentro, y toca una sola
+      // columna: `comercios` no tiene policy de UPDATE para el dueño
+      // porque habilitaría la fila entera.
+      cambiar_qr_mesa: {
+        Args: { p_comercio_id: string; p_activo: boolean };
+        Returns: void;
       };
       // Mostrador (src/app/app/pedidos/): una función por acción sobre un
       // pedido de la landing. Validan adentro rol (dueño o mostrador),

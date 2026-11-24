@@ -1,44 +1,11 @@
 import type { Metadata, Viewport } from "next";
-import { connection } from "next/server";
-import { cache } from "react";
 
-import { validarSlug } from "@/lib/comercios/validacion";
 import { enlaceWhatsApp } from "@/lib/landing/whatsapp";
-import { crearClientePublico } from "@/lib/supabase/publico";
 
 import { AvisoPublico } from "./aviso-publico";
+import { aCategoriasCarta, obtenerCarta } from "./carta-leida";
 import { IconoChat } from "./iconos";
-import { Landing, type CategoriaLanding } from "./landing";
-
-/**
- * La carta del comercio, vía `carta_publica` — la misma fuente de verdad
- * que la vista previa del dueño y la carga del mozo: ya filtra la
- * disponibilidad efectiva (sector → categoría → producto). A diferencia
- * del mozo, acá los `sin_stock` se muestran (en gris): el cliente tiene
- * que entender por qué no puede pedirlo.
- *
- * `cache` para que generateMetadata y la página hagan una sola consulta.
- * `connection()`: el cliente público no lee cookies, así que sin esto Next
- * podría prerenderizar la carta y servirla vieja.
- *
- * `leidaEn`: cuándo se leyó (reloj del servidor). La landing lo compara
- * con el estado del local que va consultando después
- * (vigilar-estado-local.tsx), para no pisar esta carta con uno más viejo.
- */
-const obtenerCarta = cache(async (slug: string) => {
-  await connection();
-  if (validarSlug(slug) !== null) return null;
-
-  const supabase = crearClientePublico();
-  const leidaEn = Date.now();
-  const { data, error } = await supabase.rpc("carta_publica", {
-    p_slug: slug,
-  });
-  // Un error de base no es "no existe": va al error boundary (con
-  // "Reintentar"), no a la página de local no disponible.
-  if (error) throw new Error(`carta_publica: ${error.message}`);
-  return data ? { ...data, leidaEn } : null;
-});
+import { Landing } from "./landing";
 
 export const viewport: Viewport = { themeColor: "#ffffff" };
 
@@ -111,25 +78,7 @@ export default async function PaginaLanding({
     );
   }
 
-  const categorias: CategoriaLanding[] = carta.categorias
-    .filter((categoria) => categoria.productos.length > 0)
-    .map((categoria) => ({
-      id: categoria.id,
-      nombre: categoria.nombre,
-      productos: categoria.productos.map((producto) => ({
-        id: producto.id,
-        nombre: producto.nombre,
-        categoriaNombre: categoria.nombre,
-        descripcion: producto.descripcion,
-        precio: producto.precio,
-        sinStock: producto.sin_stock,
-        adicionales: producto.adicionales.map((adicional) => ({
-          id: adicional.id,
-          nombre: adicional.nombre,
-          precioExtra: adicional.precio_extra,
-        })),
-      })),
-    }));
+  const categorias = aCategoriasCarta(carta);
 
   if (categorias.length === 0) {
     return (

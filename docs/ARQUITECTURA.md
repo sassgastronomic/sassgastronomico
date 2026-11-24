@@ -35,16 +35,41 @@ src/
 │   ├── error.tsx               # Error boundary de TODA la app (/, /login, /admin, /app:
 │   │                           # ninguno tiene un error.tsx propio entre éste y ellos).
 │   │
-│   ├── [slug]/                 # Landing pública de take away (/{slug}), sin sesión. Ver
-│   │   │                       # "Las pantallas públicas" más abajo.
-│   │   ├── page.tsx            # carta_publica → <Landing>, o el aviso de "no disponible".
-│   │   ├── landing.tsx         # Carta por categorías, hojas de producto y de pedido.
+│   ├── [slug]/                 # Pantallas públicas del cliente, sin sesión. Ver "Las
+│   │   │                       # pantallas públicas" más abajo. Son dos: la landing de
+│   │   │                       # take away (/{slug}) y el pedido por QR de mesa
+│   │   │                       # (/{slug}/mesa). Comparten carta, carrito y navegación.
+│   │   ├── carta/              # Lo compartido por las dos. Si algo sirve a las dos, va
+│   │   │   │                   # acá; si es de una sola, va en su carpeta.
+│   │   │   ├── tipos.ts        # La carta y las líneas del pedido, ya traducidas.
+│   │   │   ├── armazon.tsx     # El cuerpo: título, barra de categorías, secciones, pie.
+│   │   │   ├── piezas.tsx      # Tarjeta de producto, hoja, contador, barra del pedido.
+│   │   │   ├── usar-carrito.ts # El carrito y todo lo que se deriva de él.
+│   │   │   └── vistas.ts       # Las vistas como parte de la URL (el "atrás" del celular
+│   │   │                       # cierra la vista en vez de salir de la página).
+│   │   ├── carta-leida.ts      # carta_publica una sola vez por request (cache), para
+│   │   │                       # generateMetadata y la página.
+│   │   ├── page.tsx            # /{slug}: → <Landing>, o el aviso de "no disponible".
+│   │   ├── landing.tsx         # Lo propio del take away: qué datos se le piden al
+│   │   │                       # cliente (nombre, modalidad, dirección) y el confirmar.
 │   │   ├── actions.ts          # enviarPedido(): endpoint público → crear_pedido_landing.
-│   │   ├── pantalla-enviado.tsx # Después de enviar: "el local te va a mandar un link".
-│   │   ├── almacen-local.ts    # Carrito, últimos pedidos y datos del cliente en
-│   │   │                       # localStorage (comodidades, no datos que importen).
-│   │   ├── vigilar-estado-local.tsx # Mantiene la landing al día sola: caja abierta o
-│   │   │                       # cerrada, y lo que se quedó sin stock (/api/landing/…).
+│   │   ├── pantalla-enviado.tsx # Después de confirmar: el botón para mandarlo por
+│   │   │                       # WhatsApp (un enlace de verdad) y el link de seguimiento.
+│   │   ├── mesa/               # /{slug}/mesa: el QR impreso en las mesas. No pide ningún
+│   │   │   │                   # dato — el cliente está sentado y el mozo lo tiene al lado.
+│   │   │   ├── page.tsx        # Los casos de "acá no se puede pedir", cada uno con su
+│   │   │   │                   # pantalla: plan sin salón, interruptor apagado, sin carta.
+│   │   │   ├── carta-mesa.tsx  # El contenedor y la hoja del pedido (un solo paso).
+│   │   │   ├── actions.ts      # crearBorradorMesa(): público → crear_borrador_qr.
+│   │   │   ├── pantalla-qr.tsx # El QR que el cliente le muestra al mozo, el resumen y
+│   │   │   │                   # cuánto falta para que venza.
+│   │   │   └── vencimiento.ts  # El reloj del código, en un solo lugar: lo miran el aviso
+│   │   │                       # de la carta y la pantalla del QR, y tienen que coincidir.
+│   │   ├── almacen-local.ts    # Carrito, últimos pedidos, datos del cliente y el código
+│   │   │                       # del QR de mesa en localStorage (comodidades, no datos
+│   │   │                       # que importen).
+│   │   ├── vigilar-estado-local.tsx # Mantiene las dos pantallas al día solas: caja
+│   │   │                       # abierta o cerrada, y lo sin stock (/api/landing/…).
 │   │   └── pedido/[codigo]/    # Seguimiento por código (se refresca solo). El link se lo
 │   │                           # manda el local al cliente por WhatsApp.
 │   │
@@ -216,16 +241,17 @@ RLS es el motivo por el que esto es defendible incluso si alguien se olvida de e
 
 ### Las pantallas públicas
 
-`/{slug}` (la landing) y `/{slug}/pedido/{codigo}` (el seguimiento) son las únicas pantallas que usa alguien sin cuenta. Reglas propias:
+`/{slug}` (la landing de take away), `/{slug}/mesa` (el pedido por QR de mesa) y `/{slug}/pedido/{codigo}` (el seguimiento) son las únicas pantallas que usa alguien sin cuenta. Reglas propias:
 
 - **Siempre como `anon`.** Usan `crearClientePublico()` (`src/lib/supabase/publico.ts`), que no lee cookies: aunque el dueño abra su landing logueado, la base ve lo mismo que ve un cliente. Por no leer cookies, Next no se entera de que la página depende del request: las dos llaman a `connection()`.
-- **Lo único que `anon` puede hacer son cuatro funciones**: `carta_publica`, `crear_pedido_landing`, `seguimiento_pedido` y `estado_landing`. Ninguna tabla le deja leer nada: las policies llaman a `es_miembro`/`tiene_rol`, que `anon` ni siquiera puede ejecutar, así que un `select` directo con la clave anónima da *permission denied*, no filas.
+- **Lo único que `anon` puede hacer son cinco funciones**: `carta_publica`, `crear_pedido_landing`, `crear_borrador_qr`, `seguimiento_pedido` y `estado_landing`. Ninguna tabla le deja leer nada: las policies llaman a `es_miembro`/`tiene_rol`, que `anon` ni siquiera puede ejecutar, así que un `select` directo con la clave anónima da *permission denied*, no filas.
 - **La clave anónima es pública** (está en el JavaScript del navegador): cualquiera puede llamar a esas funciones directo, sin pasar por la pantalla ni por la Server Action. Por eso lo que valida `enviarPedido()` (`src/app/[slug]/actions.ts`) se repite adentro de `crear_pedido_landing` con los mismos límites (`src/lib/landing/validacion.ts`), y los precios salen siempre de la base.
 - **Sin Realtime.** El seguimiento se actualiza consultando cada 10 segundos con la pantalla a la vista (`actualizar-seguimiento.tsx`): un anónimo no recibe eventos de `pedidos` por RLS, abrírselos sería exponer pedidos ajenos, y cada pantalla abierta gastaría una de las conexiones de Realtime contadas para las pantallas del local. La landing, para saber si el local abrió o cerró la caja y qué se quedó sin stock, consulta `/api/landing/{slug}/estado` (`vigilar-estado-local.tsx`): una respuesta igual para todos, que el CDN guarda 30 segundos, así que la base recibe a lo sumo una consulta por local cada 30 segundos, miren cuantos miren. Pregunta cada minuto y al volver a la pantalla (con el local cerrado, también al entrar). La respuesta trae cuándo se leyó y la landing descarta la que sea más vieja que su carta (las dos horas son del servidor). Si cambió la caja, recarga la página; el stock lo aplica sin recargar.
 - **Sin `notFound()`.** Si el local no existe o el link de seguimiento no sirve, la página devuelve el aviso armado (`aviso-publico.tsx`) con `robots: noindex`. Con `notFound()`, Next manda un HTML vacío y el aviso lo dibuja recién el JavaScript: en un celular lento, pantalla en blanco.
 - **El contacto es WhatsApp, no un teléfono.** La landing no pide teléfono: al confirmar se crea el pedido y se abre `wa.me` con el chat del local y el pedido escrito (lo arma la Server Action con lo que guardó la base). Sin `comercios.whatsapp`, el local no toma pedidos online. El link de seguimiento se le muestra al cliente apenas confirma (pantalla de "pedido enviado") y va también en su mensaje, así le queda en el chat; el mostrador lo tiene para reenviárselo.
-- **Abrir WhatsApp solo puede fallar.** Un navegador puede no dejar abrir otra app si no viene directo de un toque, y entre el toque en "Confirmar" y la respuesta del servidor pasa un instante. En el celular se intenta primero directo a la app (`whatsapp://send`, sin la página intermedia de wa.me), en la misma pestaña (la página queda como estaba); si la app no está instalada no pasa nada, y al tope de espera aparece el aviso de "no se abrió" con el botón manual, que ahí ya usa wa.me. En la compu, siempre wa.me en una pestaña nueva. Mientras tanto, la pantalla de "pedido enviado" queda tapada por una capa semitransparente "Abriendo WhatsApp…" (sin ella se veía un instante la pantalla antes de que WhatsApp se llevara el foco). La capa se va cuando el cliente vuelve a la pestaña; si a los 4 segundos la página nunca dejó de estar a la vista, se va igual y la pantalla avisa que no se abrió, con el botón "Ir al chat del local" para abrirlo a mano, ya con un toque de verdad. Si abrir falla de entrada, no hay capa: va directo a ese aviso.
-- **El "atrás" del celular cierra las vistas.** La hoja de producto, la del pedido, la confirmación y la pantalla de "pedido enviado" están en la URL (`?producto=…`, `?ver=pedido`, `?ver=confirmar`, `?enviado=N`) con `history.pushState`, que Next integra con `useSearchParams`. Cada entrada guarda en `history.state` cuántas vistas propias hay hasta la carta (Next lo conserva al ir y volver; un `router.refresh()` lo borra, por eso la landing no recarga y vuelve atrás a la vez, ni se recarga sola con una vista abierta). Sin eso, "atrás" sacaba al cliente de la página.
+- **WhatsApp no se abre por código.** Confirmar el pedido no abre nada: la pantalla de "pedido enviado" tiene un `<a href="https://wa.me/…">` ya armado —con el número de pedido y el link de seguimiento adentro del mensaje— y lo toca el cliente. Es la única forma de que iOS no pregunte: `wa.me` es un *universal link* (al tocarlo con la app instalada la abre sin cartel, y sin ella abre la web), mientras que `whatsapp://` es un esquema propio y esos son justo los que disparan el "¿Abrir en WhatsApp?"; y una navegación disparada por JavaScript la trata como "sin intención del usuario" y cae al navegador. El `href` no se puede armar antes de confirmar porque necesita el número y el código, que los genera la base. Nada de `preventDefault` ni `window.location` en ese botón.
+- **El "atrás" del celular cierra las vistas.** La hoja de producto, la del pedido, la confirmación, la pantalla de "pedido enviado" y la del QR de mesa están en la URL (`?producto=…`, `?ver=pedido`, `?ver=confirmar`, `?enviado=N`, `?qr=1`) con `history.pushState`, que Next integra con `useSearchParams` (ver `[slug]/carta/vistas.ts`, compartido por las dos pantallas). Cada entrada guarda en `history.state` cuántas vistas propias hay hasta la carta (Next lo conserva al ir y volver; un `router.refresh()` lo borra, por eso la pantalla no recarga y vuelve atrás a la vez, ni se recarga sola con una vista abierta). Sin eso, "atrás" sacaba al cliente de la página.
+- **El QR de mesa no crea ningún pedido.** `/{slug}/mesa` no pide nombre, teléfono ni modalidad: el cliente está sentado y el mozo lo tiene al lado. Confirmar llama a `crear_borrador_qr` y lo que se le muestra es un QR con un código corto, que vale 30 minutos y no vale nada hasta que un mozo lo escanea. El código y una foto de lo que pidió quedan en `localStorage`, así que puede cerrar la pestaña y volver a buscarlo; si vence, la pantalla lo dice y le devuelve el pedido al carrito (por eso la foto guarda también los ids, no solo los nombres). El carrito se vacía al confirmar: si no, agregar un postre después volvería a mandar todo lo de la primera ronda.
 - **Slugs reservados**: `admin`, `app`, `login` y `api` no se pueden usar como slug de un comercio (`validarSlug`): su landing quedaría tapada por esas rutas.
 
 ---

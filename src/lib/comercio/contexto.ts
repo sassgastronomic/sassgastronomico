@@ -16,6 +16,10 @@ type ComercioContexto = Pick<
   // Para mostrar horas y fechas en la hora del local y no en la del
   // servidor: ver src/lib/fechas.ts.
   | "zona_horaria"
+  // El interruptor del QR de mesa (/app/mesas). Viene acá y no en una
+  // consulta aparte porque esta ya trae el comercio entero: una columna
+  // más no cuesta nada.
+  | "qr_mesa_activo"
 >;
 
 type SectorAsignado = Pick<
@@ -76,7 +80,7 @@ export async function obtenerContextoComercio(): Promise<ContextoComercio> {
   const { data: miembro } = await supabase
     .from("miembros")
     .select(
-      "rol, perfiles(nombre), comercios(id, nombre, slug, plan, estado, limite_usuarios, zona_horaria), miembro_sectores(sectores(id, nombre))",
+      "rol, perfiles(nombre), comercios(id, nombre, slug, plan, estado, limite_usuarios, zona_horaria, qr_mesa_activo), miembro_sectores(sectores(id, nombre))",
     )
     .eq("perfil_id", user.id)
     .eq("activo", true)

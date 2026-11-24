@@ -12,6 +12,19 @@ export function linkSeguimiento(
   return `${origen}/${slug}/pedido/${codigo}`;
 }
 
+/**
+ * Lo que va adentro del QR que el cliente le muestra al mozo en la mesa.
+ * El mozo lo escanea con la cámara nativa de su celular, así que tiene que
+ * ser un link común: le abre la app, donde ya está logueado, con el código
+ * del borrador puesto.
+ *
+ * Absoluto y con el mismo origen del request: el QR se escanea desde otro
+ * dispositivo, así que un link relativo no serviría.
+ */
+export function linkEscaneoMozo(origen: string, codigo: string): string {
+  return `${origen}/app/qr/${codigo}`;
+}
+
 // Direcciones de desarrollo (la compu o la red local): ahí no hay https.
 const REGEX_HOST_LOCAL = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;
 

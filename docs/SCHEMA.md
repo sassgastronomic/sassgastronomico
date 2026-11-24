@@ -43,7 +43,7 @@ grant execute on function nombre_funcion(tipos, de, los, argumentos) to authenti
 -- + `, anon` en el grant de arriba únicamente si la función es parte de la
 -- API pública (piensa: se llama desde una pantalla sin sesión, como la
 -- landing o el QR de mesa — hoy son `carta_publica`, `crear_pedido_landing`,
--- `seguimiento_pedido` y `estado_landing`).
+-- `crear_borrador_qr`, `seguimiento_pedido` y `estado_landing`).
 ```
 
 - Casi ninguna función necesita `anon`: la mayoría solo las llama la app ya logueada (rol `authenticated`), o las invoca otra función/trigger/policy dentro de una transacción de un usuario logueado.
@@ -69,7 +69,9 @@ Los dos, en `supabase/migrations/20261122045839_arreglos_advisors_rls_y_search_p
 
 **1. Funciones `security definer` que figuran como ejecutables.**
 
-Son las que la app llama por RPC: `abrir_caja`, `cerrar_caja`, `resumen_caja`, `situacion_caja`, `cerrar_cuenta`, `entregar_items_cuenta`, `cambiar_estado_item_sector`, `crear_pedido_mozo`, `crear_pedido_landing`, `aceptar_pedido_landing`, `cancelar_pedido_landing`, `entregar_pedido_landing`, `cambiar_item_pedido_landing`, `cambiar_stock_producto`, `carta_publica`, `estado_landing`, `seguimiento_pedido`, `usuario_disponible` y `usuarios_ocupados`.
+Son las que la app llama por RPC: `abrir_caja`, `cerrar_caja`, `resumen_caja`, `situacion_caja`, `cerrar_cuenta`, `entregar_items_cuenta`, `cambiar_estado_item_sector`, `crear_pedido_mozo`, `crear_pedido_landing`, `aceptar_pedido_landing`, `cancelar_pedido_landing`, `entregar_pedido_landing`, `cambiar_item_pedido_landing`, `cambiar_stock_producto`, `carta_publica`, `estado_landing`, `seguimiento_pedido`, `crear_borrador_qr`, `convertir_borrador_qr`, `usuario_disponible` y `usuarios_ocupados`.
+
+No figuran acá las `security definer` de uso interno, a las que se les revoca el `EXECUTE` también a `authenticated` (`crear_ronda_en_cuenta`, `limpiar_borradores_vencidos`, `plazos_seguimiento`, `motivo_estado_pedido`): el advisor marca las que *alguien* puede llamar, y a esas no las puede llamar nadie desde afuera — solo otra función del mismo dueño.
 
 Que sean `security definer` **es el punto**, no un descuido: tienen que escribir en tablas que el usuario no puede tocar directo (un mozo crea un pedido pero no puede escribir en `pedidos` por su cuenta), o leer a través de comercios (`usuario_disponible`). Si corrieran con los privilegios de quien llama, RLS las frenaría y no habría cómo cargar un pedido.
 
@@ -157,6 +159,7 @@ erDiagram
   comercios ||--o{ mesas : tiene
   comercios ||--o{ cuentas : tiene
   comercios ||--o{ pedidos : tiene
+  comercios ||--o{ borradores_pedido : "QR de mesa sin escanear"
   sectores ||--o{ categorias : "destino por defecto"
   sectores ||--o{ productos : "destino (override)"
   categorias ||--o{ productos : agrupa
@@ -172,7 +175,14 @@ erDiagram
 
 ### Base (sprint 1)
 
-**`comercios`**: `id`, `nombre`, `slug` (único, para URLs: `/garage-grill`; `admin`, `app`, `login` y `api` están reservados porque son rutas de la app), `plan`, `estado` (`activo` | `suspendido`), `limite_usuarios` (10), `zona_horaria` (`America/Argentina/Buenos_Aires`), `hora_corte` (06:00), `whatsapp` (solo dígitos, con código de país y sin "+", como lo pide wa.me — ej. `5491122334455`; lo carga el admin en `/admin/comercios/[id]`. Sin número, la landing no toma pedidos: es el único contacto con el cliente, ver "Landing pública"), `creado_en`.
+**`comercios`**: `id`, `nombre`, `slug` (único, para URLs: `/garage-grill`; `admin`, `app`, `login` y `api` están reservados porque son rutas de la app), `plan`, `estado` (`activo` | `suspendido`), `limite_usuarios` (10), `zona_horaria` (`America/Argentina/Buenos_Aires`), `hora_corte` (06:00), `whatsapp` (solo dígitos, con código de país y sin "+", como lo pide wa.me — ej. `5491122334455`; lo carga el admin en `/admin/comercios/[id]`. Sin número, la landing no toma pedidos: es el único contacto con el cliente, ver "Landing pública"), `qr_mesa_activo` (si el local toma pedidos por QR de mesa; **apagado por defecto**, ver "Pedido desde la mesa con QR"), `creado_en`.
+
+**Nadie escribe `comercios` directo salvo los admins.** La tabla tiene `comercios_admin` (ALL) y `comercios_leer` (SELECT para los miembros), y **no** hay policy de UPDATE para el dueño a propósito: una policy habilita la fila entera, así que le dejaría cambiarse el `plan`, el `estado` (salir de "suspendido") y el `limite_usuarios` con una llamada directa a la API. Es el mismo error que se sacó en `productos_stock` (ver "Disponibilidad durante la jornada").
+
+- `whatsapp` lo carga el **admin** en `/admin/comercios/[id]`.
+- `qr_mesa_activo` lo maneja el **dueño** en `/app/mesas`, con la función `cambiar_qr_mesa` (security definer): valida `tiene_rol(duenio)` y que el plan incluya salón, y toca esa sola columna. Apagarlo se permite con cualquier plan, para que un local que bajó de plan pueda dejarlo limpio.
+
+Cualquier otro interruptor que el dueño tenga que manejar sigue este camino: una función que valide adentro, no una policy.
 
 **`perfiles`**: `id` (= `auth.users.id`), `nombre`, `email`, `usuario` (nombre de usuario del personal sin email real, único en todo el sistema, ver "Identificación del personal"), `es_admin`, `creado_en`.
 
@@ -235,6 +245,12 @@ Cuando se acaba algo, quien se entera primero es la cocina. Marcarlo **sin stock
 **`pedido_items`**: `id`, `comercio_id`, `pedido_id`, `producto_id`, `nombre` (copia), `categoria_nombre` (copia: muchos productos se llaman solo por su variante, "Simple", y sin la categoría la cocina no sabe si es un lomito o una hamburguesa), `precio_unitario` (copia), `cantidad`, `nota` ("bien cocida"), `sector_id` (copia: a qué pantalla va), `estado`, `listo_en`, `entregado_en`.
 
 **`pedido_item_adicionales`**: `id`, `comercio_id`, `item_id`, `adicional_id`, `nombre` (copia), `precio_extra` (copia).
+
+**`borradores_pedido`** (un pedido armado por un cliente en la mesa, todavía sin escanear): `id`, `comercio_id`, `codigo` (el que viaja en el QR: 8 caracteres de base32 de Crockford —sin I, L, O ni U—, único en toda la tabla), `items` (jsonb: `[{producto_id, cantidad, nota, adicionales: [uuid]}]`, exactamente la forma que espera `crear_ronda_en_cuenta`; **ids nada más, ni nombres ni precios**), `creado_en`, `vence_en` (30 minutos), `usado_en` y `pedido_id` (nulos hasta que un mozo lo escanea; se escriben juntos). Ver "Pedido desde la mesa con QR".
+
+- **Nadie la escribe ni la lee directo.** Es la única tabla de negocio que no lleva el trío de policies de siempre: tiene RLS prendida y solo `borradores_pedido_admin`. El cliente escribe por `crear_borrador_qr` y el mozo la consume por `convertir_borrador_qr`, las dos `security definer`.
+- Los vencidos los borra `limpiar_borradores_vencidos(comercio)`, que llama `crear_borrador_qr` cada vez que se crea uno (el proyecto no tiene `pg_cron`; enganchar la limpieza al único camino que hace crecer la tabla la mantiene chica sola). Sin argumento barre todos los comercios, por si algún día hay cron.
+- Un borrador **ya usado no se borra al usarse**: queda hasta vencer, para que un segundo escaneo del mismo QR reciba "ya se cargó en una mesa" y no "no existe".
 
 ### Caja (sprint 5)
 
@@ -300,10 +316,20 @@ stateDiagram-v2
 
 ### Pedido desde la mesa con QR (plan `salon` o `completo`)
 
-- Cada mesa tiene un QR a `/{slug}/mesa/{mesa_id}` con la carta.
-- El cliente arma el pedido en su celular **sin escribir en la base**. La app genera un QR con el carrito (ids de producto, cantidades, adicionales, notas).
-- El mozo lo escanea desde su app; la app valida contra la base y crea la ronda en la cuenta abierta con `origen = 'qr_mesa'`.
-- Ventaja: no hay pedidos anónimos ni spam en la base.
+**Apagado por defecto**: lo prende el dueño en `/app/mesas` (`comercios.qr_mesa_activo`, vía `cambiar_qr_mesa`). Es una forma de trabajar que el local tiene que elegir, no algo que le aparezca solo.
+
+- En cada mesa hay un QR impreso, **el mismo para todas**, que lleva a `/{slug}/mesa` — una ruta propia, distinta de la landing de take away. Con plan `completo` las dos convivirían en el mismo link y no habría forma de saber si el cliente escaneó en una mesa o entró desde su casa: por eso son dos direcciones y el cliente no tiene que elegir nada. `/{slug}/mesa` va siempre con `noindex`.
+- El cliente arma su pedido en el celular. Al confirmar, su pantalla le muestra un QR.
+- El mozo lo escanea con la **cámara nativa** de su celular (no hace falta un lector dentro de la app): el QR es un link corto que le abre la app, donde ya está logueado. Elige la mesa y confirma.
+- El pedido entra como una ronda más de esa cuenta, con `origen = 'qr_mesa'`. **Si la mesa no tiene cuenta abierta, se abre en el mismo gesto**, con el mozo que escaneó como `mozo_id`.
+
+**El QR del cliente lleva un código corto, no el carrito entero** (ver `borradores_pedido`): así el QR queda chico y legible, y el cliente puede volver a abrirlo si cierra la pestaña. El costo es una fila en la base por pedido armado, que es lo que el diseño anterior de esta sección quería evitar — por eso el borrador **no vale nada hasta que un mozo lo escanea**: no es un pedido, no lleva número, no toca la caja, no aparece en ninguna pantalla y vence solo a los 30 minutos.
+
+- `crear_borrador_qr(slug, items)` la llaman **anónimos**. Valida lo mismo que `crear_pedido_landing` —comercio activo, plan, caja abierta y disponibilidad efectiva de cada producto— con dos diferencias: el plan tiene que incluir **salón** (al revés que la landing), y **no** pide `comercios.whatsapp` (acá el cliente está en la mesa; el mozo le lleva el pedido en la mano). Los adicionales se guardan ya filtrados a los que el producto ofrece de verdad.
+  - La caja se chequea **a mano** y no por trigger: este camino no inserta en `pedidos`, así que `asignar_numero_pedido` —que es quien la exige en todos los demás— no corre.
+- `convertir_borrador_qr(codigo, mesa)` la llama el mozo (o el dueño). Bloquea el borrador (`for update`: dos mozos escaneando el mismo QR a la vez no cargan dos rondas), valida rol, vigencia, uso y mesa, abre la cuenta si hace falta y delega la ronda en `crear_ronda_en_cuenta`. **La disponibilidad se revalida ahí**: entre que el cliente armó el pedido y el mozo escanea pueden pasar minutos, y si algo se acabó se cae toda la transacción —la cuenta recién abierta incluida—, sin dejar nada a medias.
+  - El interruptor `qr_mesa_activo` a propósito **no** se revalida al escanear: apagarlo corta los borradores nuevos, no el que un cliente ya tiene esperando en la mano. El plan y el estado del comercio **sí**.
+- `crear_ronda_en_cuenta(cuenta, items, origen)` es el cuerpo que antes vivía dentro de `crear_pedido_mozo` (bloqueo de la cuenta, chequeo de rol, revalidación de disponibilidad con la cadena completa y copias de nombre, categoría, precio y sector). Hoy `crear_pedido_mozo` es esa misma llamada con `origen = 'mozo'`, y el QR la usa con `origen = 'qr_mesa'`: una sola implementación para los dos caminos.
 
 ### Mostrador (pedidos de la landing)
 

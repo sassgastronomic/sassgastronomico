@@ -249,6 +249,136 @@ export function limpiarPedidosVencidos(slug: string) {
 }
 
 // ---------------------------------------------------------------------
+// Borrador del QR de mesa
+// ---------------------------------------------------------------------
+
+/**
+ * El código del QR que el cliente le tiene que mostrar al mozo, con una
+ * foto de lo que pidió. Se guarda para que pueda volver a abrirlo si cierra
+ * la pestaña, mientras siga vigente.
+ *
+ * Por qué una foto de las líneas y no el carrito de ese momento: el QR
+ * apunta a un borrador que ya quedó fijo en la base. Si el cliente después
+ * agrega algo al carrito, la pantalla del QR tiene que seguir mostrando lo
+ * que el QR contiene de verdad, no lo que el carrito tenga ahora. Es el
+ * mismo criterio que `PedidoReciente.mensaje`: un pedido ya mandado es una
+ * foto, no una intención que se vuelve a valuar.
+ */
+export type LineaBorrador = {
+  // Para mostrar la foto.
+  nombre: string;
+  categoriaNombre: string | null;
+  cantidad: number;
+  nota: string;
+  // Nombres, ya resueltos: es lo que se muestra.
+  adicionales: string[];
+  subtotal: number;
+  // Y los ids, para poder devolverle el pedido al carrito si el código
+  // vence (ver `reponer` en ./carta/usar-carrito.ts): sin esto, "armar el
+  // pedido de nuevo" lo obligaría a tipear todo otra vez.
+  productoId: string;
+  adicionalesIds: string[];
+};
+
+export type BorradorQr = {
+  codigo: string;
+  /** El link que va adentro del QR (absoluto: lo escanea otro celular). */
+  link: string;
+  /** Cuándo vence, en milisegundos (`Date.now()`). */
+  venceEn: number;
+  lineas: LineaBorrador[];
+  total: number;
+};
+
+const REGEX_CODIGO_BORRADOR = /^[0-9A-HJKMNP-TV-Z]{8}$/;
+
+/**
+ * Un código vencido **no** se descarta al leerlo: la pantalla del QR lo
+ * necesita para poder decir "tu código venció" y devolverle el pedido al
+ * carrito (el carrito quedó vacío al confirmar, así que si lo tiráramos
+ * acá el cliente perdería su pedido al recargar). Se descarta recién
+ * pasada esta gracia, que es la red de seguridad para que no quede nada
+ * viejo en el celular — mismo criterio que VIGENCIA_PEDIDO_RECIENTE_MS.
+ */
+const GRACIA_BORRADOR_MS = 3 * 60 * 60 * 1000;
+
+/**
+ * Mismo formato que el check `borradores_pedido_codigo_formato` de la base
+ * (base32 de Crockford, sin I, L, O ni U): si se cambia allá, acá también.
+ */
+export function esCodigoBorrador(valor: unknown): valor is string {
+  return typeof valor === "string" && REGEX_CODIGO_BORRADOR.test(valor);
+}
+
+function interpretarLineasBorrador(dato: unknown): LineaBorrador[] {
+  if (!Array.isArray(dato)) return [];
+  const crudas: unknown[] = dato;
+  const lineas: LineaBorrador[] = [];
+  for (const linea of crudas.slice(0, LIMITES_PEDIDO.lineas)) {
+    if (!esObjeto(linea) || !esUuid(linea.productoId)) continue;
+    const cantidad = linea.cantidad;
+    const subtotal = linea.subtotal;
+    if (
+      typeof cantidad !== "number" ||
+      !Number.isInteger(cantidad) ||
+      cantidad < 1 ||
+      cantidad > LIMITES_PEDIDO.cantidad ||
+      typeof subtotal !== "number" ||
+      !Number.isFinite(subtotal)
+    ) {
+      continue;
+    }
+    const adicionales: unknown = linea.adicionales;
+    const adicionalesIds: unknown = linea.adicionalesIds;
+    lineas.push({
+      nombre: textoCorto(linea.nombre, 120),
+      categoriaNombre: textoCorto(linea.categoriaNombre, 120) || null,
+      cantidad,
+      nota: textoCorto(linea.nota, LIMITES_PEDIDO.notaItem),
+      adicionales: Array.isArray(adicionales)
+        ? adicionales
+            .map((nombre: unknown) => textoCorto(nombre, 120))
+            .filter((nombre) => nombre.length > 0)
+        : [],
+      subtotal,
+      productoId: linea.productoId,
+      adicionalesIds: Array.isArray(adicionalesIds)
+        ? adicionalesIds.filter(esUuid)
+        : [],
+    });
+  }
+  return lineas;
+}
+
+function interpretarBorrador(dato: unknown): BorradorQr | null {
+  if (!esObjeto(dato)) return null;
+  const { codigo, link, venceEn, total } = dato;
+  if (
+    !esCodigoBorrador(codigo) ||
+    typeof link !== "string" ||
+    !/^https?:\/\//.test(link) ||
+    typeof venceEn !== "number" ||
+    !Number.isFinite(venceEn) ||
+    typeof total !== "number" ||
+    !Number.isFinite(total) ||
+    venceEn <= Date.now() - GRACIA_BORRADOR_MS
+  ) {
+    return null;
+  }
+  const lineas = interpretarLineasBorrador(dato.lineas);
+  if (lineas.length === 0) return null;
+  return { codigo, link, venceEn, lineas, total };
+}
+
+export function almacenBorradorQr(slug: string): Almacen<BorradorQr | null> {
+  return almacenLocal(
+    `pedido-online:${slug}:borrador-qr`,
+    interpretarBorrador,
+    null,
+  );
+}
+
+// ---------------------------------------------------------------------
 // Datos del cliente
 // ---------------------------------------------------------------------
 
