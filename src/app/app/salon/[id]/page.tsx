@@ -440,6 +440,18 @@ export default async function PaginaSalonMesa({
         </p>
       )}
 
+      {/* El cliente de esta mesa armó su pedido con el QR y la cámara no
+          quiere leerle la pantalla: se escribe el código a mano, con esta
+          mesa ya elegida del otro lado. */}
+      {cajaAbierta && contexto.comercio.qr_mesa_activo && (
+        <Link
+          href={`/app/qr?mesa=${mesa.id}`}
+          className="block rounded-2xl border border-neutral-200 bg-white px-5 py-4 text-base font-semibold text-neutral-700 active:bg-neutral-100"
+        >
+          Cargar un código del cliente →
+        </Link>
+      )}
+
       {rondas.length > 0 && (
         <div className="space-y-3">
           <h2 className="text-lg font-bold text-neutral-900">

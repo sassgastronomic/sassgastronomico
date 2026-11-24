@@ -4,10 +4,11 @@ import { redirect } from "next/navigation";
 import { obtenerCajaAbierta } from "@/lib/caja/caja";
 import { obtenerContextoComercio } from "@/lib/comercio/contexto";
 import { planPermiteSalon } from "@/lib/mesas/validacion";
+import { obtenerZonasConMesas } from "@/lib/salon/mesas";
 import { crearClienteServidor } from "@/lib/supabase/server";
 
 import { ActualizarEnVivo } from "./actualizar-en-vivo";
-import { ListadoSalon, type MesaSalon, type ZonaSalon } from "./listado";
+import { ListadoSalon, type ZonaSalon } from "./listado";
 
 const MENSAJE_ERROR: Record<string, string> = {
   mesa_ocupada:
@@ -18,48 +19,25 @@ const MENSAJE_ERROR: Record<string, string> = {
 };
 
 /**
- * Zonas activas con sus mesas activas, más — de consultas aparte —
- * cuáles están ocupadas ahora mismo, desde cuándo, y cuántos ítems tienen
- * listos para llevar. Cuatro consultas de tamaño fijo, nada de una por
- * mesa. Mismo criterio que /app/mesas: "solo lo activo de lo activo",
- * pero acá no hace falta mostrar lo inactivo (esto no es una pantalla de
- * administración).
+ * Las zonas con sus mesas (`@/lib/salon/mesas`, compartido con
+ * /app/qr/[codigo]) más lo que esta pantalla necesita de propio: cuántos
+ * ítems tiene cada cuenta listos para llevar. Una consulta más, de tamaño
+ * fijo, nada de una por mesa.
  */
-async function obtenerZonasConMesas(comercioId: string): Promise<ZonaSalon[]> {
-  const supabase = await crearClienteServidor();
+async function obtenerZonasParaAtender(
+  comercioId: string,
+): Promise<ZonaSalon[]> {
+  const zonas = await obtenerZonasConMesas(comercioId);
 
-  const { data: zonas } = await supabase
-    .from("zonas")
-    .select("id, nombre")
-    .eq("comercio_id", comercioId)
-    .eq("activo", true)
-    .order("orden", { ascending: true })
-    .order("nombre", { ascending: true });
-
-  if (!zonas || zonas.length === 0) return [];
-
-  const zonaIds = zonas.map((zona) => zona.id);
-
-  const { data: mesas } = await supabase
-    .from("mesas")
-    .select("id, nombre, zona_id")
-    .eq("comercio_id", comercioId)
-    .eq("activo", true)
-    .in("zona_id", zonaIds)
-    .order("orden", { ascending: true })
-    .order("nombre", { ascending: true });
-
-  const { data: cuentas } = await supabase
-    .from("cuentas")
-    .select("id, mesa_id, abierta_en")
-    .eq("comercio_id", comercioId)
-    .eq("estado", "abierta");
-
-  const cuentaIds = (cuentas ?? []).map((cuenta) => cuenta.id);
+  const cuentaIds = zonas
+    .flatMap((zona) => zona.mesas)
+    .map((mesa) => mesa.cuenta?.id)
+    .filter((id): id is string => id !== undefined);
 
   // Ítems listos (cocina ya los terminó) de pedidos confirmados de las
   // cuentas abiertas. Se cuentan unidades, no líneas: "2× Lomito" son dos
   // platos para llevar.
+  const supabase = await crearClienteServidor();
   const { data: listos } =
     cuentaIds.length > 0
       ? await supabase
@@ -81,34 +59,21 @@ async function obtenerZonasConMesas(comercioId: string): Promise<ZonaSalon[]> {
     );
   }
 
-  const cuentaPorMesa = new Map(
-    (cuentas ?? []).map((cuenta) => [
-      cuenta.mesa_id,
-      {
-        abiertaEn: cuenta.abierta_en,
-        listos: listosPorCuenta.get(cuenta.id) ?? 0,
-      },
-    ]),
-  );
-
-  const mesasPorZona = new Map<string, MesaSalon[]>();
-  for (const mesa of mesas ?? []) {
-    const lista = mesasPorZona.get(mesa.zona_id) ?? [];
-    lista.push({
+  return zonas.map((zona) => ({
+    id: zona.id,
+    nombre: zona.nombre,
+    mesas: zona.mesas.map((mesa) => ({
       id: mesa.id,
       nombre: mesa.nombre,
-      cuenta: cuentaPorMesa.get(mesa.id) ?? null,
-    });
-    mesasPorZona.set(mesa.zona_id, lista);
-  }
-
-  return zonas
-    .map((zona) => ({
-      id: zona.id,
-      nombre: zona.nombre,
-      mesas: mesasPorZona.get(zona.id) ?? [],
-    }))
-    .filter((zona) => zona.mesas.length > 0);
+      cuenta:
+        mesa.cuenta === null
+          ? null
+          : {
+              abiertaEn: mesa.cuenta.abiertaEn,
+              listos: listosPorCuenta.get(mesa.cuenta.id) ?? 0,
+            },
+    })),
+  }));
 }
 
 export default async function PaginaSalon({
@@ -131,7 +96,7 @@ export default async function PaginaSalon({
   const codigoError =
     typeof parametros.error === "string" ? parametros.error : undefined;
 
-  const zonas = await obtenerZonasConMesas(contexto.comercio.id);
+  const zonas = await obtenerZonasParaAtender(contexto.comercio.id);
   const cajaAbierta = (await obtenerCajaAbierta(contexto.comercio.id)) !== null;
 
   // "caja_cerrada" no se muestra como error: si sigue cerrada ya está el

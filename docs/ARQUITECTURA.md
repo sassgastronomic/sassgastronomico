@@ -104,13 +104,21 @@ src/
 │       │                        # El alta tiene dos modos: una mesa por nombre, o varias
 │       │                        # numeradas de una (prefijo + rango). Cada mesa pertenece a
 │       │                        # una zona (mesas/zonas/, ABM aparte con el mismo patrón
-│       │                        # que sectores); el listado se agrupa por zona. Sin
-│       │                        # operativa de cuentas/pedidos todavía — eso es lo que sigue.
+│       │                        # que sectores); el listado se agrupa por zona. Abajo, el
+│       │                        # interruptor del pedido por QR de mesa (cambiar_qr_mesa).
 │       ├── pedidos/             # Mostrador (dueño y mostrador, plan con take away): los
 │       │                        # pedidos online en pestañas Nuevos / En cocina / Listos.
 │       │                        # Aceptar, rechazar/cancelar, editar antes de aceptar y
 │       │                        # entregar, cada uno por su función de la base.
 │       │   └── disponibilidad/  # 4.ª solapa: sin stock / disponible, todos los sectores.
+│       ├── salon/               # Operativa de mesas (dueño y mozo, plan con salón): abrir
+│       │                        # cuentas, cargar rondas, entregar lo que cocina terminó y
+│       │                        # cerrar la mesa. salon/[id] es el detalle de una mesa.
+│       ├── qr/                  # El pedido que un cliente armó con el QR de la mesa.
+│       │                        # qr/[codigo] es donde cae el mozo al escanear: ve el
+│       │                        # detalle (con lo que se quedó sin stock marcado), elige la
+│       │                        # mesa y confirma. qr/ (sin código) es el campo para
+│       │                        # escribirlo a mano cuando la cámara no quiere leer.
 │       └── sector/[id]/         # Cocina/barra: ítems de pedidos confirmados del sector, en
 │           │                    # vivo (escucha ítems del sector y pedidos del comercio).
 │           └── disponibilidad/  # 3.ª solapa: sin stock / disponible, productos del sector.
@@ -210,7 +218,7 @@ flowchart TD
     P --> Q["Solo las filas permitidas → render"]
 ```
 
-La landing pública (`/{slug}`) no pasa por nada de esto más que por `proxy.ts`, que la deja pasar: no tiene sesión (ver "Las pantallas públicas" más abajo). El QR de mesa todavía no existe.
+La landing pública (`/{slug}`) y el QR de mesa (`/{slug}/mesa`) no pasan por nada de esto más que por `proxy.ts`, que las deja pasar: no tienen sesión (ver "Las pantallas públicas" más abajo). La otra mitad del QR de mesa —`/app/qr`, donde el mozo lo carga— sí es una pantalla de `/app` común, con su guard de rol y plan.
 
 Diferencias entre los tres tipos de ruta:
 
@@ -251,8 +259,20 @@ RLS es el motivo por el que esto es defendible incluso si alguien se olvida de e
 - **El contacto es WhatsApp, no un teléfono.** La landing no pide teléfono: al confirmar se crea el pedido y se abre `wa.me` con el chat del local y el pedido escrito (lo arma la Server Action con lo que guardó la base). Sin `comercios.whatsapp`, el local no toma pedidos online. El link de seguimiento se le muestra al cliente apenas confirma (pantalla de "pedido enviado") y va también en su mensaje, así le queda en el chat; el mostrador lo tiene para reenviárselo.
 - **WhatsApp no se abre por código.** Confirmar el pedido no abre nada: la pantalla de "pedido enviado" tiene un `<a href="https://wa.me/…">` ya armado —con el número de pedido y el link de seguimiento adentro del mensaje— y lo toca el cliente. Es la única forma de que iOS no pregunte: `wa.me` es un *universal link* (al tocarlo con la app instalada la abre sin cartel, y sin ella abre la web), mientras que `whatsapp://` es un esquema propio y esos son justo los que disparan el "¿Abrir en WhatsApp?"; y una navegación disparada por JavaScript la trata como "sin intención del usuario" y cae al navegador. El `href` no se puede armar antes de confirmar porque necesita el número y el código, que los genera la base. Nada de `preventDefault` ni `window.location` en ese botón.
 - **El "atrás" del celular cierra las vistas.** La hoja de producto, la del pedido, la confirmación, la pantalla de "pedido enviado" y la del QR de mesa están en la URL (`?producto=…`, `?ver=pedido`, `?ver=confirmar`, `?enviado=N`, `?qr=1`) con `history.pushState`, que Next integra con `useSearchParams` (ver `[slug]/carta/vistas.ts`, compartido por las dos pantallas). Cada entrada guarda en `history.state` cuántas vistas propias hay hasta la carta (Next lo conserva al ir y volver; un `router.refresh()` lo borra, por eso la pantalla no recarga y vuelve atrás a la vez, ni se recarga sola con una vista abierta). Sin eso, "atrás" sacaba al cliente de la página.
-- **El QR de mesa no crea ningún pedido.** `/{slug}/mesa` no pide nombre, teléfono ni modalidad: el cliente está sentado y el mozo lo tiene al lado. Confirmar llama a `crear_borrador_qr` y lo que se le muestra es un QR con un código corto, que vale 30 minutos y no vale nada hasta que un mozo lo escanea. El código y una foto de lo que pidió quedan en `localStorage`, así que puede cerrar la pestaña y volver a buscarlo; si vence, la pantalla lo dice y le devuelve el pedido al carrito (por eso la foto guarda también los ids, no solo los nombres). El carrito se vacía al confirmar: si no, agregar un postre después volvería a mandar todo lo de la primera ronda.
+- **El QR de mesa no crea ningún pedido.** `/{slug}/mesa` no pide nombre, teléfono ni modalidad: el cliente está sentado y el mozo lo tiene al lado. Confirmar llama a `crear_borrador_qr` y lo que se le muestra es un QR con un código corto, que vale 30 minutos y no vale nada hasta que un mozo lo escanea. El código y una foto de lo que pidió quedan en `localStorage`, así que puede cerrar la pestaña y volver a buscarlo; si vence, la pantalla lo dice y le devuelve el pedido al carrito (por eso la foto guarda también los ids, no solo los nombres). El carrito se vacía al confirmar: si no, agregar un postre después volvería a mandar todo lo de la primera ronda. El circuito lo cierra el mozo en `/app/qr/{codigo}` (ver "El pedido por QR, del lado del mozo").
 - **Slugs reservados**: `admin`, `app`, `login` y `api` no se pueden usar como slug de un comercio (`validarSlug`): su landing quedaría tapada por esas rutas.
+
+### El pedido por QR, del lado del mozo
+
+La otra mitad del circuito (`src/app/app/qr/`) no es una pantalla pública: es `/app` común, con su guard de rol (dueño o mozo) y de plan, repetido en la página y en la acción.
+
+- **No hay lector de QR dentro de la app, a propósito.** El mozo escanea con la cámara nativa de su celular, que es más rápida, no pide permisos a nada y no hay que mantenerla. El QR es un link común (`linkEscaneoMozo`, `src/lib/landing/link.ts`) a `/app/qr/{codigo}`, y el navegador lo abre en la sesión que el mozo ya tiene.
+- **La pantalla no confía en el código para nada más que buscar.** Los nombres, los precios y la disponibilidad salen de `leer_borrador_qr` (ver docs/SCHEMA.md): el borrador guarda ids pelados, y el QR, ocho caracteres.
+- **Lo que se quedó sin stock se ve antes de confirmar, no después.** `leer_borrador_qr` calcula la disponibilidad con la misma cadena que después revalida la conversión, así que lo que la pantalla marca en rojo es exactamente lo que haría fallar la carga. Y como `crear_ronda_en_cuenta` es todo o nada, con una sola línea caída no se ofrece el botón: se le pide al cliente que lo arme de nuevo, o el mozo lo carga a mano desde `/app/salon`.
+- **La caja cerrada también se avisa en vez de dejar tocar.** Sin caja no entra ningún pedido (lo corta el trigger `pedido_numero`). El interruptor apagado, en cambio, **no** bloquea: solo se avisa, porque apagarlo corta los borradores nuevos y no el que un cliente ya tiene en la mano.
+- **Un segundo escaneo no es un error.** Si el código ya se usó, la pantalla dice en qué ronda y en qué mesa entró, con un link a esa mesa. Es la respuesta a "¿entró?", que es justo por lo que el mozo volvería a escanear.
+- **El código también se escribe a mano** en `/app/qr`, un `<form>` con Server Action (anda sin JavaScript). Existe porque la pantalla del cliente le muestra el código en letras grandes para cuando la cámara no quiere leerle la pantalla: sin este campo, esa promesa no se podía cumplir. Desde el detalle de una mesa el link lleva `?mesa=`, y la mesa queda preelegida.
+- **La lista de mesas es `obtenerZonasConMesas`** (`src/lib/salon/mesas.ts`), la misma que usa `/app/salon` — ahí se le suma aparte cuántos ítems tiene cada cuenta listos para llevar, que es lo único propio de esa pantalla.
 
 ---
 
@@ -389,7 +409,7 @@ Repaso hecho con el equipo (2026-09-20): de los puntos que siguen, el cliente de
 - `src/lib/supabase/client.ts` (cliente de navegador) ya está en uso, solo para Realtime y siempre a través de `src/lib/supabase/realtime.ts`. Lo usan la pantalla de cocina (`/app/sector/[id]/pantalla-sector.tsx`, suscripta a los `pedido_items` de su sector y a los `pedidos` del comercio, para enterarse de que el mostrador aceptó o canceló uno), las dos del mozo (`/app/salon/actualizar-en-vivo.tsx`, suscriptas a `pedido_items`, `cuentas` y `cajas`), la del mostrador (`/app/pedidos/pantalla-mostrador.tsx`, suscripta a `pedidos`, `pedido_items` y `cajas` del comercio) la de la caja (`/app/caja/pantalla-caja.tsx`, suscripta a `cajas`, `pedidos` y `cuentas`) y las de disponibilidad (`src/components/disponibilidad/disponibilidad-en-vivo.tsx`, suscriptas a `productos`, `categorias` y `sectores`, y a los pedidos nuevos para avisar).
 - `src/app/layout.tsx` (shell HTML, fuentes) ya tiene `lang="es"`, pero el título por defecto sigue siendo "Create Next App" (las pantallas públicas ponen el suyo). `src/app/globals.css` ya no tiene el modo oscuro de la plantilla: la app es solo clara. `src/app/page.tsx` redirige según quién sos.
 - El circuito interno del salón está completo: abrir una cuenta, cargar rondas, marcar entregado lo que cocina terminó y cerrar la mesa (`/app/salon`), con la cocina viendo y avanzando los ítems en tiempo real (`/app/sector/[id]`).
-- El circuito de take away también está completo: la landing (`/{slug}`) toma pedidos que nacen `pendiente_confirmar`; el mostrador (`/app/pedidos`) los acepta — ahí se convierten en comanda y cocina los ve igual que una ronda de salón —, y los entrega cuando cocina termina. Un solo flujo de cocina, dos puertas de entrada. El QR de mesa todavía no existe.
+- El circuito de take away también está completo: la landing (`/{slug}`) toma pedidos que nacen `pendiente_confirmar`; el mostrador (`/app/pedidos`) los acepta — ahí se convierten en comanda y cocina los ve igual que una ronda de salón —, y los entrega cuando cocina termina. Un solo flujo de cocina, dos puertas de entrada.
 - La caja (`/app/caja`) marca la jornada: sin caja abierta no entran pedidos de ningún canal ni se abren mesas (lo impone la base, las pantallas solo lo avisan). El resumen de cierre es gestión interna, no un cierre fiscal.
 - Pendiente a propósito (fuera de esta versión): motivo de rechazo, paso "salió" para envíos, aviso sonoro, auto-cancelación de pedidos olvidados, el rol mostrador en plan salón, y cerrar los permisos generales de `pedidos`/`pedido_items` por acción (hoy la regla "el mozo no acepta" la imponen las funciones y la pantalla, pero la policy de la tabla todavía le deja escribir).
 - `src/app/admin/comercios/nuevo/page.tsx` se deja con su estructura propia (sin `formulario.tsx` separado) a propósito, no por descuido — ver "Convención de nombres" más arriba.

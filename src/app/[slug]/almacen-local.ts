@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 import { LIMITES_PEDIDO, esModalidad, esUuid } from "@/lib/landing/validacion";
+import { esCodigoBorrador } from "@/lib/qr-mesa/codigo";
 import type { ModalidadPedido } from "@/types/database";
 
 /**
@@ -290,8 +291,6 @@ export type BorradorQr = {
   total: number;
 };
 
-const REGEX_CODIGO_BORRADOR = /^[0-9A-HJKMNP-TV-Z]{8}$/;
-
 /**
  * Un código vencido **no** se descarta al leerlo: la pantalla del QR lo
  * necesita para poder decir "tu código venció" y devolverle el pedido al
@@ -301,14 +300,6 @@ const REGEX_CODIGO_BORRADOR = /^[0-9A-HJKMNP-TV-Z]{8}$/;
  * viejo en el celular — mismo criterio que VIGENCIA_PEDIDO_RECIENTE_MS.
  */
 const GRACIA_BORRADOR_MS = 3 * 60 * 60 * 1000;
-
-/**
- * Mismo formato que el check `borradores_pedido_codigo_formato` de la base
- * (base32 de Crockford, sin I, L, O ni U): si se cambia allá, acá también.
- */
-export function esCodigoBorrador(valor: unknown): valor is string {
-  return typeof valor === "string" && REGEX_CODIGO_BORRADOR.test(valor);
-}
 
 function interpretarLineasBorrador(dato: unknown): LineaBorrador[] {
   if (!Array.isArray(dato)) return [];

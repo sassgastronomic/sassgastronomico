@@ -135,6 +135,65 @@ export type SeguimientoPedidoResultado = {
 };
 
 /**
+ * Una línea del borrador del QR de mesa, ya resuelta por
+ * `leer_borrador_qr` para la pantalla del mozo: el borrador guarda ids
+ * pelados, esto trae nombre, categoría y precio.
+ *
+ * Ojo con la diferencia entre los dos campos de disponibilidad, porque la
+ * pantalla las trata distinto:
+ *
+ * - `disponible: false` **bloquea** la carga: `crear_ronda_en_cuenta` es
+ *   todo o nada, así que una sola línea en false hace fallar la ronda
+ *   entera.
+ * - `adicionales_caidos > 0` **no** bloquea nada: son agregados que el
+ *   cliente eligió y hoy ya no aplican; la conversión los filtra y carga
+ *   la línea sin ellos. Solo hay que avisarle al mozo.
+ *
+ * `nombre` es null cuando el producto ya no está en la tabla (borrado, no
+ * desactivado): ahí no hay nada que mostrar más que "ya no está".
+ */
+export type ItemBorradorQr = {
+  producto_id: string;
+  nombre: string | null;
+  categoria_nombre: string | null;
+  // El precio de HOY, que es el que va a quedar copiado en `pedido_items`
+  // al convertir — no el de cuando el cliente armó el pedido.
+  precio: number;
+  cantidad: number;
+  nota: string | null;
+  disponible: boolean;
+  adicionales: { nombre: string; precio_extra: number }[];
+  adicionales_caidos: number;
+  subtotal: number;
+};
+
+/**
+ * Lo que devuelve `leer_borrador_qr(p_codigo)` para la pantalla del mozo
+ * (/app/qr/[codigo]). `null` si el código no existe **o** si quien
+ * pregunta no es dueño ni mozo de ese comercio: las dos cosas se
+ * contestan igual a propósito.
+ *
+ * `cargado` viene con datos solo cuando `estado` es `usado`: es el "ya lo
+ * cargaste, es la ronda #N".
+ */
+export type BorradorQrLeido = {
+  comercio_id: string;
+  codigo: string;
+  estado: "vigente" | "vencido" | "usado";
+  creado_en: string;
+  vence_en: string;
+  items: ItemBorradorQr[];
+  total: number;
+  hay_no_disponibles: boolean;
+  cargado: {
+    pedido_numero: number | null;
+    mesa_id: string | null;
+    mesa_nombre: string | null;
+    usado_en: string;
+  } | null;
+};
+
+/**
  * Resumen de gestión de una jornada (`resumen_caja`, y la foto que guarda
  * `cerrar_caja`): solo los pedidos de esa jornada, sin los cancelados en
  * el total. Es un resumen interno: no es un comprobante ni reemplaza el
@@ -891,6 +950,29 @@ export interface Database {
       crear_borrador_qr: {
         Args: { p_slug: string; p_items: ItemPedidoLanding[] };
         Returns: { codigo: string; vence_en: string };
+      };
+      // El borrador del QR resuelto para la pantalla del mozo
+      // (/app/qr/[codigo]): nombres, precios y disponibilidad del momento,
+      // con la misma cadena que revalida la conversión. No escribe nada.
+      // `null` si el código no existe o si quien pregunta no es dueño ni
+      // mozo de ese comercio.
+      leer_borrador_qr: {
+        Args: { p_codigo: string };
+        Returns: BorradorQrLeido | null;
+      };
+      // El mozo convierte el borrador en una ronda de la mesa que eligió:
+      // valida rol, borrador vigente y sin usar, abre la cuenta si la mesa
+      // no la tiene y revalida la disponibilidad de cada producto, todo en
+      // una transacción — ver src/app/app/qr/[codigo]/actions.ts.
+      convertir_borrador_qr: {
+        Args: { p_codigo: string; p_mesa_id: string };
+        Returns: {
+          pedido_id: string;
+          numero: number;
+          cuenta_id: string;
+          // true si la mesa estaba libre y se abrió en este mismo gesto.
+          mesa_abierta_ahora: boolean;
+        };
       };
       // El interruptor del QR de mesa, en manos del dueño (/app/mesas).
       // Valida `tiene_rol(duenio)` y el plan adentro, y toca una sola

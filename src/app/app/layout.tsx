@@ -25,10 +25,12 @@ type SectorVisible = { id: string; nombre: string };
 function construirSecciones({
   rol,
   plan,
+  qrMesaActivo,
   sectoresVisibles,
 }: {
   rol: RolMiembro;
   plan: PlanComercio;
+  qrMesaActivo: boolean;
   sectoresVisibles: SectorVisible[];
 }): ItemMenu[] {
   const secciones: ItemMenu[] = [];
@@ -65,6 +67,19 @@ function construirSecciones({
     (rol === "duenio" || rol === "mozo")
   ) {
     secciones.push({ href: "/app/salon", etiqueta: "Atender mesas" });
+  }
+
+  // Escribir a mano el código del cliente. Solo aparece con el pedido por
+  // QR prendido: sin eso no hay códigos que cargar. El camino normal es
+  // escanear el QR con la cámara (lleva directo a /app/qr/[codigo]); esta
+  // entrada es para cuando la cámara no quiere leer la pantalla del
+  // cliente, que es por lo que esa pantalla le muestra el código escrito.
+  if (
+    (plan === "salon" || plan === "completo") &&
+    (rol === "duenio" || rol === "mozo") &&
+    qrMesaActivo
+  ) {
+    secciones.push({ href: "/app/qr", etiqueta: "Código QR" });
   }
 
   if ((plan === "salon" || plan === "completo") && rol === "duenio") {
@@ -161,6 +176,7 @@ export default async function LayoutApp({ children }: LayoutProps<"/app">) {
   const secciones = construirSecciones({
     rol,
     plan: comercio.plan,
+    qrMesaActivo: comercio.qr_mesa_activo,
     sectoresVisibles,
   });
 
