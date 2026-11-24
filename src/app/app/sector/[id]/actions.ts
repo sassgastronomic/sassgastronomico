@@ -2,36 +2,24 @@
 
 import { obtenerContextoComercio } from "@/lib/comercio/contexto";
 import { crearClienteServidor } from "@/lib/supabase/server";
-import type { EstadoItem } from "@/types/database";
-
-// Solo estos dos pasos importan acá: 'listo' -> 'entregado' lo maneja otra
-// pantalla (se lo entrega el mozo), no esta.
-const SIGUIENTE_ESTADO: Partial<Record<EstadoItem, EstadoItem>> = {
-  pendiente: "en_preparacion",
-  en_preparacion: "listo",
-};
 
 /**
  * Dueño (cualquier sector) o rol `sector` con este sector puntual
  * asignado — mismo criterio de acceso que la página
- * (src/app/app/sector/[id]/page.tsx), revalidado acá porque una Server
- * Action es su propio endpoint y no depende de haber pasado por ahí.
+ * (src/app/app/sector/[id]/page.tsx).
+ *
+ * Es el primer filtro barato, para no gastar una llamada a la base: el
+ * mismo criterio lo revalida adentro `cambiar_estado_item_sector` (ver
+ * supabase/migrations/), que es donde cuenta.
  */
-async function puedeOperarEnSector(
-  sectorId: string,
-): Promise<{ ok: true; comercioId: string } | { ok: false }> {
+async function puedeOperarEnSector(sectorId: string): Promise<boolean> {
   const contexto = await obtenerContextoComercio();
-  if (contexto.tipo !== "activo") return { ok: false };
-  if (contexto.rol === "duenio") {
-    return { ok: true, comercioId: contexto.comercio.id };
-  }
-  if (
+  if (contexto.tipo !== "activo") return false;
+  if (contexto.rol === "duenio") return true;
+  return (
     contexto.rol === "sector" &&
     contexto.sectoresAsignados.some((sector) => sector.id === sectorId)
-  ) {
-    return { ok: true, comercioId: contexto.comercio.id };
-  }
-  return { ok: false };
+  );
 }
 
 // Sin `revalidatePath`: la pantalla de sector se actualiza sola vía la
@@ -40,74 +28,55 @@ async function puedeOperarEnSector(
 // hizo el cambio — revalidatePath acá sería redundante con eso.
 
 /**
- * Avanza un ítem un paso (pendiente -> en preparación -> listo). No hace
- * nada si el ítem no existe en este sector/comercio, o si ya está en
- * 'listo'/'entregado' (no hay paso siguiente que este botón maneje).
+ * Las tres acciones de esta pantalla son la misma función de la base,
+ * `cambiar_estado_item_sector`, que decide *ella* el estado destino:
+ * avanzar es pendiente -> en preparación -> listo, y retroceder es listo
+ * -> en preparación. Desde acá no se manda ningún estado, así que no hay
+ * forma de saltear un paso ni de marcar algo `entregado` (eso es del
+ * mozo, en otra pantalla).
+ *
+ * La función valida adentro el rol y el sector, que el ítem sea de este
+ * sector y que su pedido esté confirmado —lo mismo que lista la pantalla—.
+ * Si no había nada que cambiar devuelve 0 y no pasa nada: no hay error
+ * que mostrar.
+ */
+
+/**
+ * Avanza un ítem un paso. No hace nada si el ítem no es de este sector, o
+ * si ya está en 'listo'/'entregado' (no hay paso siguiente que este botón
+ * maneje).
  */
 export async function avanzarItem(
   itemId: string,
   sectorId: string,
 ): Promise<void> {
-  const autorizacion = await puedeOperarEnSector(sectorId);
-  if (!autorizacion.ok) return;
+  if (!(await puedeOperarEnSector(sectorId))) return;
 
   const supabase = await crearClienteServidor();
-
-  const { data: item } = await supabase
-    .from("pedido_items")
-    .select("estado")
-    .eq("id", itemId)
-    .eq("sector_id", sectorId)
-    .eq("comercio_id", autorizacion.comercioId)
-    .maybeSingle();
-
-  if (!item) return;
-
-  const siguiente = SIGUIENTE_ESTADO[item.estado];
-  if (!siguiente) return;
-
-  await supabase
-    .from("pedido_items")
-    .update(
-      siguiente === "listo"
-        ? { estado: siguiente, listo_en: new Date().toISOString() }
-        : { estado: siguiente },
-    )
-    .eq("id", itemId)
-    .eq("sector_id", sectorId)
-    .eq("comercio_id", autorizacion.comercioId);
+  await supabase.rpc("cambiar_estado_item_sector", {
+    p_sector_id: sectorId,
+    p_avanzar: true,
+    p_item_id: itemId,
+  });
 }
 
 /**
  * Avanza todos los ítems de un pedido (en este sector) un paso cada uno.
- * El orden de los dos updates importa: primero en_preparacion -> listo, y
- * recién después pendiente -> en_preparacion — así ningún ítem pendiente
- * salta directo a listo de un solo toque.
+ * Es un solo update adentro de la función, y un update visita cada fila
+ * una vez: ningún ítem pendiente salta directo a listo de un solo toque.
  */
 export async function avanzarPedido(
   pedidoId: string,
   sectorId: string,
 ): Promise<void> {
-  const autorizacion = await puedeOperarEnSector(sectorId);
-  if (!autorizacion.ok) return;
+  if (!(await puedeOperarEnSector(sectorId))) return;
 
   const supabase = await crearClienteServidor();
-
-  await supabase
-    .from("pedido_items")
-    .update({ estado: "listo", listo_en: new Date().toISOString() })
-    .eq("pedido_id", pedidoId)
-    .eq("sector_id", sectorId)
-    .eq("comercio_id", autorizacion.comercioId)
-    .eq("estado", "en_preparacion");
-
-  await supabase
-    .from("pedido_items")
-    .update({ estado: "en_preparacion" })
-    .eq("pedido_id", pedidoId)
-    .eq("sector_id", sectorId)
-    .eq("comercio_id", autorizacion.comercioId)
-    .eq("estado", "pendiente");
+  await supabase.rpc("cambiar_estado_item_sector", {
+    p_sector_id: sectorId,
+    p_avanzar: true,
+    p_pedido_id: pedidoId,
+  });
 }
 
 /**
@@ -119,16 +88,12 @@ export async function retrocederItem(
   itemId: string,
   sectorId: string,
 ): Promise<void> {
-  const autorizacion = await puedeOperarEnSector(sectorId);
-  if (!autorizacion.ok) return;
+  if (!(await puedeOperarEnSector(sectorId))) return;
 
   const supabase = await crearClienteServidor();
-
-  await supabase
-    .from("pedido_items")
-    .update({ estado: "en_preparacion", listo_en: null })
-    .eq("id", itemId)
-    .eq("sector_id", sectorId)
-    .eq("comercio_id", autorizacion.comercioId)
-    .eq("estado", "listo");
+  await supabase.rpc("cambiar_estado_item_sector", {
+    p_sector_id: sectorId,
+    p_avanzar: false,
+    p_item_id: itemId,
+  });
 }

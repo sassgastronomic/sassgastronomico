@@ -10,12 +10,14 @@ import type { ItemPedidoMozo } from "@/types/database";
 
 /**
  * Dueño o mozo, con plan que incluya salón — mismo criterio que la
- * página. Devuelve el comercio y la cuenta abierta de la mesa, o null si
- * algo no cierra (sin permiso, mesa ajena o sin cuenta abierta).
+ * página. Devuelve la cuenta abierta de la mesa, o null si algo no cierra
+ * (sin permiso, mesa ajena o sin cuenta abierta).
+ *
+ * Es el primer filtro barato, para no gastar una llamada a la base: el
+ * permiso de verdad lo validan adentro `entregar_items_cuenta` y
+ * `cerrar_cuenta` (ver supabase/migrations/).
  */
-async function cuentaAbiertaDeMesa(
-  mesaId: string,
-): Promise<{ comercioId: string; cuentaId: string } | null> {
+async function cuentaAbiertaDeMesa(mesaId: string): Promise<string | null> {
   const contexto = await obtenerContextoComercio();
   if (contexto.tipo !== "activo") return null;
   if (contexto.rol !== "duenio" && contexto.rol !== "mozo") return null;
@@ -30,57 +32,34 @@ async function cuentaAbiertaDeMesa(
     .eq("estado", "abierta")
     .maybeSingle();
 
-  if (!cuenta) return null;
-  return { comercioId: contexto.comercio.id, cuentaId: cuenta.id };
+  return cuenta?.id ?? null;
 }
 
 /**
- * Ids de los ítems listos de esta cuenta (de pedidos confirmados). Si se
- * pasa `itemId`, solo ese — y solo si de verdad es de esta mesa y está
- * listo: no se confía en el id que llega del formulario.
- */
-async function itemsListosDeCuenta(
-  comercioId: string,
-  cuentaId: string,
-  itemId?: string,
-): Promise<string[]> {
-  const supabase = await crearClienteServidor();
-  let consulta = supabase
-    .from("pedido_items")
-    .select("id, pedidos!inner(cuenta_id, estado)")
-    .eq("comercio_id", comercioId)
-    .eq("estado", "listo")
-    .eq("pedidos.cuenta_id", cuentaId)
-    .eq("pedidos.estado", "confirmado");
-  if (itemId) consulta = consulta.eq("id", itemId);
-
-  const { data } = await consulta;
-  return (data ?? []).map((item) => item.id);
-}
-
-/**
- * Marca como entregados los ítems indicados. El `.eq("estado", "listo")`
- * del update evita pisar un ítem que cambió entre la consulta y la
- * escritura (por ejemplo, cocina lo volvió a "en preparación").
+ * Entrega lo que está listo en la mesa: con `itemId`, ese ítem; sin él,
+ * todo. Lo hace `entregar_items_cuenta` en la base, que valida rol,
+ * cuenta abierta y que el ítem sea de un pedido confirmado *de esta
+ * cuenta* — así no se puede entregar algo que no es de la mesa, ni saltar
+ * un estado: solo pasa de `listo` a `entregado`.
  *
  * El pedido pasa a `entregado` solo cuando todos sus ítems lo están: eso
  * lo hace el trigger `item_entregado` (cerrar_pedido_si_completo) en la
  * base, no esta acción.
+ *
+ * Si no entregó nada —cocina volvió el ítem a "en preparación" justo
+ * antes, u otro mozo llegó primero— no hay nada que avisar: la pantalla se
+ * rearma y muestra cómo quedó.
  */
 async function entregar(
   mesaId: string,
-  comercioId: string,
-  ids: string[],
+  cuentaId: string,
+  itemId?: string,
 ): Promise<void> {
-  if (ids.length === 0) return;
-
   const supabase = await crearClienteServidor();
-  await supabase
-    .from("pedido_items")
-    .update({ estado: "entregado", entregado_en: new Date().toISOString() })
-    .eq("comercio_id", comercioId)
-    .eq("estado", "listo")
-    .in("id", ids);
+  await supabase.rpc("entregar_items_cuenta", {
+    p_cuenta_id: cuentaId,
+    ...(itemId ? { p_item_id: itemId } : {}),
+  });
 
   revalidatePath(`/app/salon/${mesaId}`);
   revalidatePath("/app/salon");
@@ -97,11 +76,10 @@ export async function marcarEntregado(
   _formData: FormData,
 ): Promise<void> {
   void _formData;
-  const cuenta = await cuentaAbiertaDeMesa(mesaId);
-  if (!cuenta) return;
+  const cuentaId = await cuentaAbiertaDeMesa(mesaId);
+  if (!cuentaId) return;
 
-  const ids = await itemsListosDeCuenta(cuenta.comercioId, cuenta.cuentaId, itemId);
-  await entregar(mesaId, cuenta.comercioId, ids);
+  await entregar(mesaId, cuentaId, itemId);
 }
 
 export type PendientesPorEstado = {
@@ -131,8 +109,8 @@ export type ResultadoCerrarCuenta =
 export async function cerrarCuenta(
   mesaId: string,
 ): Promise<ResultadoCerrarCuenta> {
-  const cuenta = await cuentaAbiertaDeMesa(mesaId);
-  if (!cuenta) {
+  const cuentaId = await cuentaAbiertaDeMesa(mesaId);
+  if (!cuentaId) {
     return {
       tipo: "error",
       error: "Esa mesa ya no tiene una cuenta abierta.",
@@ -141,7 +119,7 @@ export async function cerrarCuenta(
 
   const supabase = await crearClienteServidor();
   const { data, error } = await supabase.rpc("cerrar_cuenta", {
-    p_cuenta_id: cuenta.cuentaId,
+    p_cuenta_id: cuentaId,
   });
 
   if (error || !data) {
@@ -172,11 +150,10 @@ export async function marcarTodoEntregado(
   _formData: FormData,
 ): Promise<void> {
   void _formData;
-  const cuenta = await cuentaAbiertaDeMesa(mesaId);
-  if (!cuenta) return;
+  const cuentaId = await cuentaAbiertaDeMesa(mesaId);
+  if (!cuentaId) return;
 
-  const ids = await itemsListosDeCuenta(cuenta.comercioId, cuenta.cuentaId);
-  await entregar(mesaId, cuenta.comercioId, ids);
+  await entregar(mesaId, cuentaId);
 }
 
 export type ItemCarritoEnvio = {

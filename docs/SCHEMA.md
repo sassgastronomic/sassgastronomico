@@ -69,7 +69,7 @@ Los dos, en `supabase/migrations/20261122045839_arreglos_advisors_rls_y_search_p
 
 **1. Funciones `security definer` que figuran como ejecutables.**
 
-Son las que la app llama por RPC: `abrir_caja`, `cerrar_caja`, `resumen_caja`, `situacion_caja`, `cerrar_cuenta`, `crear_pedido_mozo`, `crear_pedido_landing`, `aceptar_pedido_landing`, `cancelar_pedido_landing`, `entregar_pedido_landing`, `cambiar_item_pedido_landing`, `cambiar_stock_producto`, `carta_publica`, `estado_landing`, `seguimiento_pedido`, `usuario_disponible` y `usuarios_ocupados`.
+Son las que la app llama por RPC: `abrir_caja`, `cerrar_caja`, `resumen_caja`, `situacion_caja`, `cerrar_cuenta`, `entregar_items_cuenta`, `cambiar_estado_item_sector`, `crear_pedido_mozo`, `crear_pedido_landing`, `aceptar_pedido_landing`, `cancelar_pedido_landing`, `entregar_pedido_landing`, `cambiar_item_pedido_landing`, `cambiar_stock_producto`, `carta_publica`, `estado_landing`, `seguimiento_pedido`, `usuario_disponible` y `usuarios_ocupados`.
 
 Que sean `security definer` **es el punto**, no un descuido: tienen que escribir en tablas que el usuario no puede tocar directo (un mozo crea un pedido pero no puede escribir en `pedidos` por su cuenta), o leer a través de comercios (`usuario_disponible`). Si corrieran con los privilegios de quien llama, RLS las frenaría y no habría cómo cargar un pedido.
 

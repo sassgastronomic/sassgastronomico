@@ -891,9 +891,29 @@ export interface Database {
         Args: { p_pedido_id: string };
         Returns: void;
       };
-      // Cierra la cuenta solo si no queda nada sin entregar; si queda,
-      // devuelve `ok: false` con cuántos ítems hay en cada estado (y no
-      // cierra). Bloquea la cuenta mientras tanto — ver supabase/migrations/.
+      // Salón (src/app/app/salon/[id]/): el mozo entrega lo que está
+      // listo. Con `p_item_id`, ese ítem; sin él, todo lo listo de la
+      // mesa. Valida adentro rol, cuenta abierta y que el ítem sea de un
+      // pedido confirmado de esa cuenta. Devuelve cuántos entregó.
+      entregar_items_cuenta: {
+        Args: { p_cuenta_id: string; p_item_id?: string };
+        Returns: number;
+      };
+      // Cocina (src/app/app/sector/[id]/): avanzar un paso
+      // (pendiente -> en preparación -> listo) o retroceder uno
+      // (listo -> en preparación, de a un ítem). El destino lo calcula la
+      // base: no se elige desde acá. Con `p_item_id` va un ítem; con
+      // `p_pedido_id`, todos los de ese pedido en el sector. Devuelve
+      // cuántos cambió.
+      cambiar_estado_item_sector: {
+        Args: {
+          p_sector_id: string;
+          p_avanzar: boolean;
+          p_item_id?: string;
+          p_pedido_id?: string;
+        };
+        Returns: number;
+      };
       // Caja (src/app/app/caja/): solo dueño y mostrador, validado adentro.
       // situacion_caja devuelve null si quien pregunta no lo es.
       situacion_caja: {
@@ -924,6 +944,9 @@ export interface Database {
           | { ok: true; reactivados: number; resumen: ResumenJornada }
           | { ok: false; pendientes: PendientesCaja };
       };
+      // Cierra la cuenta solo si no queda nada sin entregar; si queda,
+      // devuelve `ok: false` con cuántos ítems hay en cada estado (y no
+      // cierra). Bloquea la cuenta mientras tanto — ver supabase/migrations/.
       cerrar_cuenta: {
         Args: { p_cuenta_id: string };
         Returns: {
